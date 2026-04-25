@@ -1,0 +1,72 @@
+# Benchmark configurations.
+
+benchmarks:
+  crows_pairs:
+    enabled: true
+    dataset: "nyu-mll/crows_pairs"
+    split: "test"
+    categories:
+      - "race-color"
+      - "gender"
+      - "religion"
+      - "age"
+      - "nationality"
+      - "disability"
+      - "physical-appearance"
+      - "socioeconomic"
+      - "sexual-orientation"
+    notes: |
+      Compute sum-of-token-log-probs for stereotypical vs anti-stereotypical sentence in each minimal pair.
+      Score = % of pairs where log P(stereo) > log P(anti). 50 = unbiased.
+
+  bbq:
+    enabled: true
+    dataset: "heegyu/bbq"
+    split: "test"
+    notes: |
+      Multiple-choice QA across 9 social dimensions. Bias score is % of stereotypical
+      answers chosen in ambiguous contexts (where the unknown answer is correct).
+
+  stereoset:
+    enabled: true
+    dataset: "McGill-NLP/stereoset"
+    config: "intrasentence"
+    split: "validation"
+    domains: ["gender", "profession", "race", "religion"]
+    notes: |
+      SS = stereotype score (% stereo > anti). LMS = % meaningful (non-unrelated).
+      ICAT = LMS * min(SS, 100-SS) / 50. Penalizes models that score 50 only because
+      they are bad language models.
+
+  iat:
+    enabled: true
+    source: "github.com/baixuechunzi/llm-implicit-bias"
+    categories: ["race", "gender", "religion", "health"]
+    notes: |
+      Adapted from Bai et al. (PNAS 2025). Word-association prompts: compute log P(attr | concept)
+      for stereotypical vs anti-stereotypical pairings. Effect size analogous to Cohen's d.
+
+# Output paths (relative to project root).
+outputs:
+  results_root: "results"
+  logit_scores_dir: "results/logit_scores"
+  activations_dir: "results/activations"
+  probe_results_dir: "results/probe_results"
+  aggregated_parquet: "results/aggregated.parquet"
+  figures_dir: "figures"
+
+# Reproducibility.
+seed: 42
+
+# Probing config.
+probing:
+  pool: "mean"           # "mean" or "last"
+  cv_folds: 5
+  attributes: ["gender", "race"]
+  max_sentences: 1000    # cap activations cached per model
+
+# Statistics.
+statistics:
+  bootstrap_iters: 1000
+  fdr_method: "benjamini-hochberg"
+  alpha: 0.05

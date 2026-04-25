@@ -1,0 +1,251 @@
+# Central model registry. Every script reads from this file.
+# 22 base ↔ instruct pairs = 44 checkpoints across 4 families.
+# All models load in full bfloat16 — no quantization.
+
+families:
+  llama:
+    display_name: "Llama"
+    vendor: "Meta"
+    requires_hf_auth: true
+    generations:
+      - name: "Llama 2"
+        release_date: "2023-07"
+        models:
+          - size: "7B"
+            base_id: "meta-llama/Llama-2-7b-hf"
+            instruct_id: "meta-llama/Llama-2-7b-chat-hf"
+            num_params: 7_000_000_000
+            num_layers: 32
+            hidden_size: 4096
+            dtype: "bfloat16"
+      - name: "Llama 3"
+        release_date: "2024-04"
+        models:
+          - size: "8B"
+            base_id: "meta-llama/Meta-Llama-3-8B"
+            instruct_id: "meta-llama/Meta-Llama-3-8B-Instruct"
+            num_params: 8_000_000_000
+            num_layers: 32
+            hidden_size: 4096
+            dtype: "bfloat16"
+      - name: "Llama 3.1"
+        release_date: "2024-07"
+        models:
+          - size: "8B"
+            base_id: "meta-llama/Llama-3.1-8B"
+            instruct_id: "meta-llama/Llama-3.1-8B-Instruct"
+            num_params: 8_000_000_000
+            num_layers: 32
+            hidden_size: 4096
+            dtype: "bfloat16"
+      - name: "Llama 3.2"
+        release_date: "2024-09"
+        models:
+          - size: "1B"
+            base_id: "meta-llama/Llama-3.2-1B"
+            instruct_id: "meta-llama/Llama-3.2-1B-Instruct"
+            num_params: 1_000_000_000
+            num_layers: 16
+            hidden_size: 2048
+            dtype: "bfloat16"
+          - size: "3B"
+            base_id: "meta-llama/Llama-3.2-3B"
+            instruct_id: "meta-llama/Llama-3.2-3B-Instruct"
+            num_params: 3_000_000_000
+            num_layers: 28
+            hidden_size: 3072
+            dtype: "bfloat16"
+
+  qwen:
+    display_name: "Qwen"
+    vendor: "Alibaba"
+    requires_hf_auth: false
+    notes: "Qwen3 inverts the naming convention: -Base = base, no suffix = instruct."
+    generations:
+      - name: "Qwen 2.5"
+        release_date: "2024-09"
+        models:
+          - size: "1.5B"
+            base_id: "Qwen/Qwen2.5-1.5B"
+            instruct_id: "Qwen/Qwen2.5-1.5B-Instruct"
+            num_params: 1_500_000_000
+            num_layers: 28
+            hidden_size: 1536
+            dtype: "bfloat16"
+          - size: "3B"
+            base_id: "Qwen/Qwen2.5-3B"
+            instruct_id: "Qwen/Qwen2.5-3B-Instruct"
+            num_params: 3_000_000_000
+            num_layers: 36
+            hidden_size: 2048
+            dtype: "bfloat16"
+          - size: "7B"
+            base_id: "Qwen/Qwen2.5-7B"
+            instruct_id: "Qwen/Qwen2.5-7B-Instruct"
+            num_params: 7_000_000_000
+            num_layers: 28
+            hidden_size: 3584
+            dtype: "bfloat16"
+          - size: "14B"
+            base_id: "Qwen/Qwen2.5-14B"
+            instruct_id: "Qwen/Qwen2.5-14B-Instruct"
+            num_params: 14_000_000_000
+            num_layers: 48
+            hidden_size: 5120
+            dtype: "bfloat16"
+          - size: "32B"
+            base_id: "Qwen/Qwen2.5-32B"
+            instruct_id: "Qwen/Qwen2.5-32B-Instruct"
+            num_params: 32_000_000_000
+            num_layers: 64
+            hidden_size: 5120
+            dtype: "bfloat16"
+            notes: "~64GB in bf16, fits on A100 80GB with batch_size=1"
+      - name: "Qwen 3"
+        release_date: "2025-04"
+        models:
+          - size: "4B"
+            base_id: "Qwen/Qwen3-4B-Base"
+            instruct_id: "Qwen/Qwen3-4B"
+            num_params: 4_000_000_000
+            num_layers: 36
+            hidden_size: 2560
+            dtype: "bfloat16"
+          - size: "8B"
+            base_id: "Qwen/Qwen3-8B-Base"
+            instruct_id: "Qwen/Qwen3-8B"
+            num_params: 8_000_000_000
+            num_layers: 36
+            hidden_size: 4096
+            dtype: "bfloat16"
+
+  gemma:
+    display_name: "Gemma"
+    vendor: "Google"
+    requires_hf_auth: true
+    generations:
+      - name: "Gemma 1"
+        release_date: "2024-02"
+        models:
+          - size: "2B"
+            base_id: "google/gemma-2b"
+            instruct_id: "google/gemma-2b-it"
+            num_params: 2_000_000_000
+            num_layers: 18
+            hidden_size: 2048
+            dtype: "bfloat16"
+            model_class: "AutoModelForCausalLM"
+          - size: "7B"
+            base_id: "google/gemma-7b"
+            instruct_id: "google/gemma-7b-it"
+            num_params: 7_000_000_000
+            num_layers: 28
+            hidden_size: 3072
+            dtype: "bfloat16"
+            model_class: "AutoModelForCausalLM"
+      - name: "Gemma 2"
+        release_date: "2024-06"
+        models:
+          - size: "2B"
+            base_id: "google/gemma-2-2b"
+            instruct_id: "google/gemma-2-2b-it"
+            num_params: 2_000_000_000
+            num_layers: 26
+            hidden_size: 2304
+            dtype: "bfloat16"
+            model_class: "AutoModelForCausalLM"
+          - size: "9B"
+            base_id: "google/gemma-2-9b"
+            instruct_id: "google/gemma-2-9b-it"
+            num_params: 9_000_000_000
+            num_layers: 42
+            hidden_size: 3584
+            dtype: "bfloat16"
+            model_class: "AutoModelForCausalLM"
+          - size: "27B"
+            base_id: "google/gemma-2-27b"
+            instruct_id: "google/gemma-2-27b-it"
+            num_params: 27_000_000_000
+            num_layers: 46
+            hidden_size: 4608
+            dtype: "bfloat16"
+            model_class: "AutoModelForCausalLM"
+            notes: "~54GB in bf16, fits comfortably on A100 80GB"
+      - name: "Gemma 3"
+        release_date: "2025-03"
+        notes: "Multimodal models — load with Gemma3ForCausalLM for text-only mode."
+        models:
+          - size: "4B"
+            base_id: "google/gemma-3-4b-pt"
+            instruct_id: "google/gemma-3-4b-it"
+            num_params: 4_000_000_000
+            num_layers: 34
+            hidden_size: 2560
+            dtype: "bfloat16"
+            model_class: "Gemma3ForCausalLM"
+          - size: "12B"
+            base_id: "google/gemma-3-12b-pt"
+            instruct_id: "google/gemma-3-12b-it"
+            num_params: 12_000_000_000
+            num_layers: 48
+            hidden_size: 3840
+            dtype: "bfloat16"
+            model_class: "Gemma3ForCausalLM"
+      - name: "Gemma 4"
+        release_date: "2026-04"
+        notes: "Newest generation — load with Gemma4ForCausalLM for text-only mode. VERIFY HF IDs before relying on these (released ~April 2026)."
+        models:
+          - size: "31B"
+            base_id: "google/gemma-4-31B"
+            instruct_id: "google/gemma-4-31B-it"
+            num_params: 31_000_000_000
+            num_layers: 50
+            hidden_size: 4608
+            dtype: "bfloat16"
+            model_class: "Gemma4ForCausalLM"
+            notes: "~62GB in bf16, fits on A100 80GB with batch_size=1"
+
+  mistral:
+    display_name: "Mistral"
+    vendor: "Mistral AI"
+    requires_hf_auth: false
+    generations:
+      - name: "Mistral v0.1"
+        release_date: "2023-09"
+        models:
+          - size: "7B"
+            base_id: "mistralai/Mistral-7B-v0.1"
+            instruct_id: "mistralai/Mistral-7B-Instruct-v0.1"
+            num_params: 7_000_000_000
+            num_layers: 32
+            hidden_size: 4096
+            dtype: "bfloat16"
+      - name: "Mistral v0.3"
+        release_date: "2024-05"
+        models:
+          - size: "7B"
+            base_id: "mistralai/Mistral-7B-v0.3"
+            instruct_id: "mistralai/Mistral-7B-Instruct-v0.3"
+            num_params: 7_000_000_000
+            num_layers: 32
+            hidden_size: 4096
+            dtype: "bfloat16"
+
+# Subset for linear probing. One representative pair per family.
+# For models >14B, stream activations to disk one layer at a time.
+probing_subset:
+  - "meta-llama/Llama-2-7b-hf"
+  - "meta-llama/Llama-2-7b-chat-hf"
+  - "meta-llama/Llama-3.1-8B"
+  - "meta-llama/Llama-3.1-8B-Instruct"
+  - "Qwen/Qwen2.5-7B"
+  - "Qwen/Qwen2.5-7B-Instruct"
+  - "google/gemma-2-9b"
+  - "google/gemma-2-9b-it"
+  - "google/gemma-3-4b-pt"
+  - "google/gemma-3-4b-it"
+  - "mistralai/Mistral-7B-v0.3"
+  - "mistralai/Mistral-7B-Instruct-v0.3"
+
+# Used for the local smoke test — tiny CPU-runnable model.
+smoke_test_model: "sshleifer/tiny-gpt2"

@@ -1,0 +1,37 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual envs
+.venv/
+venv/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Results (run outputs are large + reproducible from code)
+results/
+!results/.gitkeep
+figures/*.png
+figures/*.pdf
+!figures/.gitkeep
+
+# WandB local cache
+wandb/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp

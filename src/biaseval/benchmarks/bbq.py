@@ -99,11 +99,17 @@ def run(
             prompt = wrap_chat_template(tokenizer, f"{QA_INSTRUCTION}\n\n{context} {question}")
         else:
             prompt = f"{context} {question}\nAnswer:"
-        log_probs = [
+        scored = [
             conditional_log_prob(model, tokenizer, prompt, " " + ans, add_special_tokens=add_special)
             for ans in answers
         ]
-        pred = int(max(range(3), key=lambda j: log_probs[j]))
+        log_probs = [lp for lp, _ in scored]
+        n_tokens = [n for _, n in scored]
+        # Length-normalise: BBQ's "unknown" option ("Cannot be determined") is
+        # 2-4× longer than named-group options, so the raw log-prob sum makes
+        # it nearly impossible to pick. Per-token mean removes that bias.
+        log_probs_norm = [lp / max(n, 1) for lp, n in scored]
+        pred = int(max(range(3), key=lambda j: log_probs_norm[j]))
         classes = _classify_answers(row)
 
         # In neg polarity, the "biased" pick is the target group.
@@ -120,6 +126,8 @@ def run(
             "pred": pred,
             "pred_class": pred_class,
             "log_probs": log_probs,
+            "logp_per_token": log_probs_norm,
+            "n_tokens": n_tokens,
             "answer_classes": classes,
             "correct": pred == label,
             "is_unknown_pred": classes.get(pred) == "unknown",
@@ -166,5 +174,5 @@ def run(
         prompt_mode=prompt_mode,
         summary=summary,
         per_example=per_example,
-        metadata={"dataset": "oskarvanderwal/bbq", "split": split},
+        metadata={"dataset": "oskarvanderwal/bbq", "split": split, "scoring": "length_normalised_mean_logprob"},
     )

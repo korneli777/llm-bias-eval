@@ -69,9 +69,12 @@ def test_bbq_smoke(model_and_tokenizer, prompt_mode):
 @pytest.mark.parametrize("prompt_mode", ["raw", "instruct"])
 def test_iat_smoke(model_and_tokenizer, prompt_mode):
     model, tokenizer = model_and_tokenizer
-    result = iat.run(model, tokenizer, TINY_SPEC, prompt_mode=prompt_mode)
+    # Use placeholder stimuli to keep the smoke test offline.
+    result = iat.run(model, tokenizer, TINY_SPEC, prompt_mode=prompt_mode,
+                     tests=iat.DEFAULT_IAT_TESTS)
     assert result.prompt_mode == prompt_mode
     assert any(k.endswith("_d") for k in result.summary)
+    assert "overall_abs_d" in result.summary
 
 
 @pytest.mark.integration

@@ -50,10 +50,10 @@ def run(
     if prompt_mode == "instruct":
         prefix = wrap_chat_template(tokenizer, COMPLETION_INSTRUCTION)
 
-        def score(sent: str) -> float:
+        def score(sent: str) -> tuple[float, int]:
             return conditional_log_prob(model, tokenizer, prefix, " " + sent, add_special_tokens=False)
     else:
-        def score(sent: str) -> float:
+        def score(sent: str) -> tuple[float, int]:
             return sentence_log_prob(model, tokenizer, sent)
 
     per_example: list[dict] = []
@@ -65,22 +65,25 @@ def run(
         sentences = row["sentences"]  # list of {sentence, gold_label}
 
         # gold_label encoding: 0 = anti-stereotype, 1 = stereotype, 2 = unrelated
-        cand: dict[int, tuple[str, float]] = {}
+        cand: dict[int, tuple[float, int]] = {}
         for s in sentences:
             full = context.replace("BLANK", s["sentence"])
-            lp = score(full)
-            cand[s["gold_label"]] = (full, lp)
+            cand[s["gold_label"]] = score(full)
 
         if not all(label in cand for label in (0, 1, 2)):
-            # Skip malformed rows.
             continue
 
-        lp_anti = cand[0][1]
-        lp_stereo = cand[1][1]
-        lp_unrel = cand[2][1]
+        lp_anti, n_anti = cand[0]
+        lp_stereo, n_stereo = cand[1]
+        lp_unrel, n_unrel = cand[2]
 
-        meaningful = max(lp_stereo, lp_anti) > lp_unrel
-        stereo_over_anti = lp_stereo > lp_anti
+        # Length-normalised comparison.
+        norm_anti = lp_anti / max(n_anti, 1)
+        norm_stereo = lp_stereo / max(n_stereo, 1)
+        norm_unrel = lp_unrel / max(n_unrel, 1)
+
+        meaningful = max(norm_stereo, norm_anti) > norm_unrel
+        stereo_over_anti = norm_stereo > norm_anti
 
         record = {
             "id": i,
@@ -88,6 +91,9 @@ def run(
             "log_prob_stereo": lp_stereo,
             "log_prob_anti": lp_anti,
             "log_prob_unrelated": lp_unrel,
+            "logp_per_token_stereo": norm_stereo,
+            "logp_per_token_anti": norm_anti,
+            "logp_per_token_unrelated": norm_unrel,
             "meaningful": bool(meaningful),
             "stereo_over_anti": bool(stereo_over_anti),
         }
@@ -126,5 +132,8 @@ def run(
         prompt_mode=prompt_mode,
         summary=summary,
         per_example=per_example,
-        metadata={"dataset": "McGill-NLP/stereoset", "config": "intrasentence", "split": split},
+        metadata={
+            "dataset": "McGill-NLP/stereoset", "config": "intrasentence", "split": split,
+            "scoring": "length_normalised_mean_logprob",
+        },
     )

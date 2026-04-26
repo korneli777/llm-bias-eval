@@ -54,8 +54,13 @@ def sentence_log_prob(
     tokenizer: PreTrainedTokenizerBase,
     sentence: str,
     add_bos: bool = True,
-) -> float:
+) -> tuple[float, int]:
     """Sum of token log-probs P(t_i | t_<i) over the whole sentence.
+
+    Returns ``(sum_log_prob, n_tokens)`` so callers can length-normalise.
+    Length normalisation is essential when comparing strings of unequal token
+    length (e.g. BBQ multiple-choice answers) — without it, longer continuations
+    are systematically penalised by the cumulative sum.
 
     Args
     ----
@@ -76,7 +81,7 @@ def sentence_log_prob(
 
     log_probs = torch.log_softmax(shift_logits, dim=-1)
     token_log_probs = log_probs.gather(2, shift_labels.unsqueeze(-1)).squeeze(-1)
-    return token_log_probs.sum().item()
+    return token_log_probs.sum().item(), token_log_probs.shape[1]
 
 
 @torch.no_grad()
@@ -87,8 +92,13 @@ def conditional_log_prob(
     continuation: str,
     *,
     add_special_tokens: bool = True,
-) -> float:
+) -> tuple[float, int]:
     """log P(continuation | context). Context tokens contribute 0.
+
+    Returns ``(sum_log_prob, n_continuation_tokens)`` so the caller can divide
+    to obtain a length-normalised score — required for fair comparison when
+    candidate continuations differ in length (BBQ multiple choice in particular,
+    where the "unknown" option is usually 2-4× longer than the named groups).
 
     Pass ``add_special_tokens=False`` when ``context`` was produced by
     ``apply_chat_template`` — that string already contains BOS / role markers
@@ -108,4 +118,5 @@ def conditional_log_prob(
     token_log_probs = log_probs.gather(2, labels.unsqueeze(-1)).squeeze(-1)
     # Tokens at positions [ctx_len-1 .. end-1] in token_log_probs correspond to
     # predictions for positions [ctx_len .. end] in the full sequence.
-    return token_log_probs[0, ctx_len - 1 :].sum().item()
+    cont_lp = token_log_probs[0, ctx_len - 1 :]
+    return cont_lp.sum().item(), cont_lp.shape[0]

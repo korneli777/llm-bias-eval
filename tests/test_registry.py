@@ -56,3 +56,23 @@ def test_gated_flag_set():
             assert s.requires_hf_auth, f"{s.model_id} should require HF auth"
         else:
             assert not s.requires_hf_auth, f"{s.model_id} should NOT require HF auth"
+
+
+def test_iat_stimuli_loader():
+    """Bai et al. CSV parses to the test-dict shape iat.run() expects."""
+    import pytest
+
+    from biaseval.data import load_iat_stimuli
+    try:
+        tests = load_iat_stimuli()
+    except Exception as e:
+        pytest.skip(f"network unavailable: {e}")
+    assert len(tests) >= 15, "expected >=15 IAT subtests in the Bai release"
+    cats = {t["category"] for t in tests}
+    assert cats == {"race", "gender", "religion", "age", "health"}
+    for t in tests:
+        for key in ("category", "subcategory", "target_a", "target_b", "attr_a", "attr_b"):
+            assert key in t, f"missing {key} in {t}"
+        assert t["target_a"]["stimuli"] and t["target_b"]["stimuli"]
+        assert len(t["attr_a"]["stimuli"]) == len(t["attr_b"]["stimuli"])
+        assert len(t["attr_a"]["stimuli"]) >= 2

@@ -1,5 +1,16 @@
 # Benchmark configurations.
 
+# Each benchmark is run once per prompt_mode. Adds a 2nd dimension to results:
+#   raw      → score lp(continuation) directly. Measures the latent / pre-RLHF
+#              probability of the stereotype — what the LM "knows".
+#   instruct → wrap the stem in the model's chat template and an instruction.
+#              Measures expressed bias under the engaged safety / RLHF persona.
+# Comparing the two on instruct-tuned checkpoints distinguishes "alignment
+# suppresses bias" (raw high, instruct low) from "alignment removes bias"
+# (both low). Run on base models too for symmetry — base output will be
+# incoherent in instruct mode but the prompt structure stays comparable.
+prompt_modes: ["raw", "instruct"]
+
 benchmarks:
   crows_pairs:
     enabled: true

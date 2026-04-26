@@ -39,8 +39,31 @@ def _runtime_metadata() -> dict[str, Any]:
     }
 
 
-def logit_result_path(results_root: Path, benchmark: str, spec: ModelSpec) -> Path:
-    return Path(results_root) / "logit_scores" / benchmark / f"{spec.short_name}.json"
+def logit_result_path(
+    results_root: Path, benchmark: str, spec: ModelSpec, prompt_mode: str = "raw"
+) -> Path:
+    return Path(results_root) / "logit_scores" / benchmark / f"{spec.short_name}__{prompt_mode}.json"
+
+
+def migrate_legacy_result_paths(results_root: Path) -> int:
+    """Rename `{model}.json` → `{model}__raw.json` under logit_scores/.
+
+    Idempotent — leaves already-suffixed files alone. Returns the number of
+    files renamed. Run-once helper for results produced before prompt_mode existed.
+    """
+    n = 0
+    base = Path(results_root) / "logit_scores"
+    if not base.exists():
+        return 0
+    for path in base.glob("*/*.json"):
+        if "__" in path.stem:
+            continue
+        new_path = path.with_name(f"{path.stem}__raw.json")
+        if new_path.exists():
+            continue
+        path.rename(new_path)
+        n += 1
+    return n
 
 
 def probe_result_path(results_root: Path, spec: ModelSpec, attribute: str) -> Path:
@@ -63,7 +86,7 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
 def write_benchmark_result(
     results_root: Path, result: BenchmarkResult, spec: ModelSpec
 ) -> Path:
-    path = logit_result_path(results_root, result.benchmark, spec)
+    path = logit_result_path(results_root, result.benchmark, spec, result.prompt_mode)
     payload = {
         "spec": {
             "model_id": spec.model_id,

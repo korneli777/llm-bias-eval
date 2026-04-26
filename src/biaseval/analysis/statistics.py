@@ -59,13 +59,13 @@ def benjamini_hochberg(p_values: np.ndarray, alpha: float = 0.05) -> np.ndarray:
 
 def per_example_bootstrap(
     results_dir: Path, benchmark: str, *, n_iter: int = 1000,
-) -> dict[str, dict[str, float]]:
+) -> dict[tuple[str, str], dict[str, float]]:
     """For one benchmark, compute bootstrap CIs over per-example data per model.
 
     Currently supported: crows_pairs (binary stereo_won), stereoset (SS).
-    Returns {model_id: {"point": ..., "lo": ..., "hi": ..., "n": ...}}.
+    Returns {(model_id, prompt_mode): {"point": ..., "lo": ..., "hi": ..., "n": ...}}.
     """
-    out: dict[str, dict[str, float]] = {}
+    out: dict[tuple[str, str], dict[str, float]] = {}
     for path in (results_dir / "logit_scores" / benchmark).glob("*.json"):
         with open(path) as f:
             data = json.load(f)
@@ -86,5 +86,8 @@ def per_example_bootstrap(
         else:
             continue
         point, lo, hi = bootstrap_ci(arr, statistic=stat, n_iter=n_iter)
-        out[data["spec"]["model_id"]] = {"point": point, "lo": lo, "hi": hi, "n": len(arr)}
+        prompt_mode = data["result"].get("prompt_mode", "raw")
+        out[(data["spec"]["model_id"], prompt_mode)] = {
+            "point": point, "lo": lo, "hi": hi, "n": len(arr),
+        }
     return out

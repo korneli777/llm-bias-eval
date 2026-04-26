@@ -19,6 +19,7 @@ def aggregate_logit_results(results_root: Path) -> pd.DataFrame:
             data = json.load(f)
         spec = data["spec"]
         result = data["result"]
+        prompt_mode = result.get("prompt_mode", "raw")
         for metric, value in result["summary"].items():
             rows.append(
                 {
@@ -29,6 +30,7 @@ def aggregate_logit_results(results_root: Path) -> pd.DataFrame:
                     "variant": spec["variant"],
                     "num_params": spec["num_params"],
                     "benchmark": result["benchmark"],
+                    "prompt_mode": prompt_mode,
                     "metric": metric,
                     "value": value,
                 }

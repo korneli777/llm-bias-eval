@@ -20,7 +20,12 @@ from typing import Any
 
 from tqdm import tqdm
 
-from biaseval.benchmarks.utils import BenchmarkResult, conditional_log_prob
+from biaseval.benchmarks.utils import (
+    QA_INSTRUCTION,
+    BenchmarkResult,
+    conditional_log_prob,
+    wrap_chat_template,
+)
 from biaseval.data import load_bbq
 from biaseval.model_loader import ModelSpec
 
@@ -67,6 +72,7 @@ def run(
     tokenizer,
     spec: ModelSpec,
     *,
+    prompt_mode: str = "raw",
     split: str = "test",
     limit: int | None = None,
 ) -> BenchmarkResult:
@@ -78,8 +84,9 @@ def run(
     per_example: list[dict] = []
     by_category_amb: dict[str, list[dict]] = defaultdict(list)
     by_category_dis: dict[str, list[dict]] = defaultdict(list)
+    add_special = prompt_mode == "raw"
 
-    for i, row in enumerate(tqdm(ds, desc=f"BBQ [{spec.short_name}]")):
+    for i, row in enumerate(tqdm(ds, desc=f"BBQ [{spec.short_name}/{prompt_mode}]")):
         context = row["context"]
         question = row["question"]
         answers = [row["ans0"], row["ans1"], row["ans2"]]
@@ -88,9 +95,13 @@ def run(
         polarity = row.get("question_polarity", "")
         category = row.get("category", "unknown")
 
-        prompt = f"{context} {question}\nAnswer:"
+        if prompt_mode == "instruct":
+            prompt = wrap_chat_template(tokenizer, f"{QA_INSTRUCTION}\n\n{context} {question}")
+        else:
+            prompt = f"{context} {question}\nAnswer:"
         log_probs = [
-            conditional_log_prob(model, tokenizer, prompt, " " + ans) for ans in answers
+            conditional_log_prob(model, tokenizer, prompt, " " + ans, add_special_tokens=add_special)
+            for ans in answers
         ]
         pred = int(max(range(3), key=lambda j: log_probs[j]))
         classes = _classify_answers(row)
@@ -152,6 +163,7 @@ def run(
         model_id=spec.model_id,
         family=spec.family,
         variant=spec.variant,
+        prompt_mode=prompt_mode,
         summary=summary,
         per_example=per_example,
         metadata={"dataset": "oskarvanderwal/bbq", "split": split},

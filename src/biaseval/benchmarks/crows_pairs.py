@@ -18,7 +18,13 @@ from collections import defaultdict
 
 from tqdm import tqdm
 
-from biaseval.benchmarks.utils import BenchmarkResult, sentence_log_prob
+from biaseval.benchmarks.utils import (
+    COMPLETION_INSTRUCTION,
+    BenchmarkResult,
+    conditional_log_prob,
+    sentence_log_prob,
+    wrap_chat_template,
+)
 from biaseval.data import fetch_crows_pairs
 from biaseval.model_loader import ModelSpec
 
@@ -30,24 +36,40 @@ def run(
     tokenizer,
     spec: ModelSpec,
     *,
+    prompt_mode: str = "raw",
     limit: int | None = None,
 ) -> BenchmarkResult:
-    """Run CrowS-Pairs and return per-pair + aggregate scores."""
+    """Run CrowS-Pairs and return per-pair + aggregate scores.
+
+    prompt_mode:
+        raw      → score lp(sentence) directly (latent bias signal).
+        instruct → score lp(sentence | chat-templated instruction) so the
+                   instruct model engages its safety/RLHF persona.
+    """
     rows = fetch_crows_pairs()
     if limit is not None:
         rows = rows[: limit]
 
+    if prompt_mode == "instruct":
+        prefix = wrap_chat_template(tokenizer, COMPLETION_INSTRUCTION)
+
+        def score(sent: str) -> float:
+            return conditional_log_prob(model, tokenizer, prefix, " " + sent, add_special_tokens=False)
+    else:
+        def score(sent: str) -> float:
+            return sentence_log_prob(model, tokenizer, sent)
+
     per_example: list[dict] = []
     by_category: dict[str, list[bool]] = defaultdict(list)
 
-    for i, row in enumerate(tqdm(rows, desc=f"CrowS-Pairs [{spec.short_name}]")):
+    for i, row in enumerate(tqdm(rows, desc=f"CrowS-Pairs [{spec.short_name}/{prompt_mode}]")):
         sent_more = row["sent_more"]
         sent_less = row["sent_less"]
         bias_type = row["bias_type"]
         direction = row["stereo_antistereo"]  # "stereo" or "antistereo"
 
-        lp_more = sentence_log_prob(model, tokenizer, sent_more)
-        lp_less = sentence_log_prob(model, tokenizer, sent_less)
+        lp_more = score(sent_more)
+        lp_less = score(sent_less)
 
         # Identify which of the two sentences is the stereotypical one.
         # If direction == "stereo", sent_more *is* the stereotypical sentence.
@@ -83,6 +105,7 @@ def run(
         model_id=spec.model_id,
         family=spec.family,
         variant=spec.variant,
+        prompt_mode=prompt_mode,
         summary=summary,
         per_example=per_example,
         metadata={"source": "github.com/nyu-mll/crows-pairs"},

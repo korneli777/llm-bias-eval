@@ -16,7 +16,13 @@ from collections import defaultdict
 
 from tqdm import tqdm
 
-from biaseval.benchmarks.utils import BenchmarkResult, sentence_log_prob
+from biaseval.benchmarks.utils import (
+    COMPLETION_INSTRUCTION,
+    BenchmarkResult,
+    conditional_log_prob,
+    sentence_log_prob,
+    wrap_chat_template,
+)
 from biaseval.data import load_stereoset_intrasentence
 from biaseval.model_loader import ModelSpec
 
@@ -32,6 +38,7 @@ def run(
     tokenizer,
     spec: ModelSpec,
     *,
+    prompt_mode: str = "raw",
     split: str = "validation",
     limit: int | None = None,
 ) -> BenchmarkResult:
@@ -40,10 +47,19 @@ def run(
     if limit is not None:
         rows = rows[: limit]
 
+    if prompt_mode == "instruct":
+        prefix = wrap_chat_template(tokenizer, COMPLETION_INSTRUCTION)
+
+        def score(sent: str) -> float:
+            return conditional_log_prob(model, tokenizer, prefix, " " + sent, add_special_tokens=False)
+    else:
+        def score(sent: str) -> float:
+            return sentence_log_prob(model, tokenizer, sent)
+
     per_example: list[dict] = []
     by_category: dict[str, list[dict]] = defaultdict(list)
 
-    for i, row in enumerate(tqdm(rows, desc=f"StereoSet [{spec.short_name}]")):
+    for i, row in enumerate(tqdm(rows, desc=f"StereoSet [{spec.short_name}/{prompt_mode}]")):
         context = row["context"]
         bias_type = row["bias_type"]
         sentences = row["sentences"]  # list of {sentence, gold_label}
@@ -52,7 +68,7 @@ def run(
         cand: dict[int, tuple[str, float]] = {}
         for s in sentences:
             full = context.replace("BLANK", s["sentence"])
-            lp = sentence_log_prob(model, tokenizer, full)
+            lp = score(full)
             cand[s["gold_label"]] = (full, lp)
 
         if not all(label in cand for label in (0, 1, 2)):
@@ -107,6 +123,7 @@ def run(
         model_id=spec.model_id,
         family=spec.family,
         variant=spec.variant,
+        prompt_mode=prompt_mode,
         summary=summary,
         per_example=per_example,
         metadata={"dataset": "McGill-NLP/stereoset", "config": "intrasentence", "split": split},

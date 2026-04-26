@@ -31,7 +31,13 @@ from dotenv import load_dotenv
 from transformers import set_seed
 
 from biaseval.benchmarks import bbq, crows_pairs, iat, stereoset
-from biaseval.io import is_completed, logit_result_path, write_benchmark_result
+from biaseval.benchmarks.utils import PROMPT_MODES
+from biaseval.io import (
+    is_completed,
+    logit_result_path,
+    migrate_legacy_result_paths,
+    write_benchmark_result,
+)
 from biaseval.model_loader import ModelSpec, load_model, unload_model
 from biaseval.registry import filter_specs, load_registry
 from biaseval.tracking import init_run
@@ -55,6 +61,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--variant", default=None, choices=["base", "instruct"])
     p.add_argument("--benchmarks", nargs="+", default=None,
                    help="Subset of benchmarks (default: all enabled in benchmarks.yaml)")
+    p.add_argument("--prompt-modes", nargs="+", default=list(PROMPT_MODES),
+                   choices=list(PROMPT_MODES),
+                   help="Prompt conditions to evaluate (default: raw + instruct).")
     p.add_argument("--limit", type=int, default=None,
                    help="Cap dataset size per benchmark (debugging)")
     p.add_argument("--no-wandb", action="store_true")
@@ -101,14 +110,22 @@ def main() -> int:
     logger.info("Will evaluate %d models × %d benchmarks", len(specs), len(enabled))
 
     results_root = Path(args.results_root)
+    migrated = migrate_legacy_result_paths(results_root)
+    if migrated:
+        logger.info("Migrated %d legacy result file(s) to __raw.json", migrated)
+
+    prompt_modes: list[str] = args.prompt_modes
     n_done, n_skipped, n_errors = 0, 0, 0
 
     for spec in specs:
-        # Decide whether anything is left to do for this model.
-        pending = [b for b in enabled if not is_completed(logit_result_path(results_root, b, spec))]
+        # Pending = (benchmark, prompt_mode) pairs whose result file doesn't exist.
+        pending = [
+            (b, pm) for b in enabled for pm in prompt_modes
+            if not is_completed(logit_result_path(results_root, b, spec, pm))
+        ]
         if not pending:
-            logger.info("[skip] %s — all benchmarks already done", spec.model_id)
-            n_skipped += len(enabled)
+            logger.info("[skip] %s — all (benchmark, prompt_mode) cells done", spec.model_id)
+            n_skipped += len(enabled) * len(prompt_modes)
             continue
 
         logger.info("[load] %s (pending: %s)", spec.model_id, pending)
@@ -119,28 +136,30 @@ def main() -> int:
             n_errors += len(pending)
             continue
 
-        for bench in pending:
+        for bench, pm in pending:
             run_ctx = init_run(
-                name=f"{bench}/{spec.short_name}",
+                name=f"{bench}/{pm}/{spec.short_name}",
                 job_type=bench,
-                tags=[spec.family, spec.variant, bench],
+                tags=[spec.family, spec.variant, bench, f"prompt:{pm}"],
                 config={
                     "model_id": spec.model_id, "family": spec.family,
                     "variant": spec.variant, "size": spec.size, "benchmark": bench,
-                    "seed": args.seed, "limit": limit,
+                    "prompt_mode": pm, "seed": args.seed, "limit": limit,
                 },
                 enabled=not args.no_wandb,
             )
             with run_ctx as tracker:
                 try:
                     runner = BENCHMARK_RUNNERS[bench]
-                    kwargs = {"limit": limit} if limit is not None and bench != "iat" else {}
+                    kwargs: dict = {"prompt_mode": pm}
+                    if limit is not None and bench != "iat":
+                        kwargs["limit"] = limit
                     result = runner(model, tokenizer, spec, **kwargs)
                     write_benchmark_result(results_root, result, spec)
                     tracker.summary_update(result.summary)
                     n_done += 1
                 except Exception:
-                    logger.error("[error] %s on %s\n%s", bench, spec.model_id, traceback.format_exc())
+                    logger.error("[error] %s/%s on %s\n%s", bench, pm, spec.model_id, traceback.format_exc())
                     n_errors += 1
 
         unload_model(model)

@@ -31,44 +31,52 @@ def model_and_tokenizer():
 
 
 @pytest.mark.integration
-def test_crows_pairs_smoke(model_and_tokenizer, tmp_path):
+@pytest.mark.parametrize("prompt_mode", ["raw", "instruct"])
+def test_crows_pairs_smoke(model_and_tokenizer, tmp_path, prompt_mode):
     model, tokenizer = model_and_tokenizer
-    result = crows_pairs.run(model, tokenizer, TINY_SPEC, limit=4)
+    result = crows_pairs.run(model, tokenizer, TINY_SPEC, prompt_mode=prompt_mode, limit=4)
     assert result.benchmark == "crows_pairs"
+    assert result.prompt_mode == prompt_mode
     assert "overall" in result.summary
     assert len(result.per_example) == 4
     out = write_benchmark_result(tmp_path, result, TINY_SPEC)
     assert out.exists()
+    assert out.stem.endswith(f"__{prompt_mode}")
 
 
 @pytest.mark.integration
-def test_stereoset_smoke(model_and_tokenizer, tmp_path):
+@pytest.mark.parametrize("prompt_mode", ["raw", "instruct"])
+def test_stereoset_smoke(model_and_tokenizer, prompt_mode):
     model, tokenizer = model_and_tokenizer
-    result = stereoset.run(model, tokenizer, TINY_SPEC, limit=4)
+    result = stereoset.run(model, tokenizer, TINY_SPEC, prompt_mode=prompt_mode, limit=4)
+    assert result.prompt_mode == prompt_mode
     assert "overall_SS" in result.summary
     assert "overall_LMS" in result.summary
     assert "overall_ICAT" in result.summary
 
 
 @pytest.mark.integration
-def test_bbq_smoke(model_and_tokenizer, tmp_path):
+@pytest.mark.parametrize("prompt_mode", ["raw", "instruct"])
+def test_bbq_smoke(model_and_tokenizer, prompt_mode):
     model, tokenizer = model_and_tokenizer
-    result = bbq.run(model, tokenizer, TINY_SPEC, limit=4)
+    result = bbq.run(model, tokenizer, TINY_SPEC, prompt_mode=prompt_mode, limit=4)
+    assert result.prompt_mode == prompt_mode
     assert "overall_acc_ambig" in result.summary
     assert len(result.per_example) <= 4
 
 
 @pytest.mark.integration
-def test_iat_smoke(model_and_tokenizer, tmp_path):
+@pytest.mark.parametrize("prompt_mode", ["raw", "instruct"])
+def test_iat_smoke(model_and_tokenizer, prompt_mode):
     model, tokenizer = model_and_tokenizer
-    # IAT runs all 4 categories with the default stimulus set.
-    result = iat.run(model, tokenizer, TINY_SPEC)
+    result = iat.run(model, tokenizer, TINY_SPEC, prompt_mode=prompt_mode)
+    assert result.prompt_mode == prompt_mode
     assert any(k.endswith("_d") for k in result.summary)
 
 
 @pytest.mark.integration
-def test_aggregation_and_plotting(model_and_tokenizer, tmp_path):
-    """Run two benchmarks then verify aggregation + at least one figure."""
+def test_aggregation_keeps_prompt_mode(model_and_tokenizer, tmp_path):
+    """Both modes should appear as separate rows in the aggregated table."""
     from biaseval.analysis.aggregate_results import (
         aggregate_logit_results,
         write_aggregated,
@@ -76,13 +84,18 @@ def test_aggregation_and_plotting(model_and_tokenizer, tmp_path):
     from biaseval.analysis.plotting import generate_all
 
     model, tokenizer = model_and_tokenizer
-    write_benchmark_result(tmp_path, crows_pairs.run(model, tokenizer, TINY_SPEC, limit=4), TINY_SPEC)
-    write_benchmark_result(tmp_path, stereoset.run(model, tokenizer, TINY_SPEC, limit=4), TINY_SPEC)
+    for mode in ("raw", "instruct"):
+        write_benchmark_result(
+            tmp_path,
+            crows_pairs.run(model, tokenizer, TINY_SPEC, prompt_mode=mode, limit=4),
+            TINY_SPEC,
+        )
 
     counts = write_aggregated(tmp_path, tmp_path / "agg.parquet")
     assert counts["logit_rows"] > 0
 
     logit_df = aggregate_logit_results(tmp_path)
+    assert set(logit_df["prompt_mode"].unique()) == {"raw", "instruct"}
+
     paths = generate_all(logit_df, probe_df=__import__("pandas").DataFrame(), figures_dir=tmp_path / "figs")
-    # tiny-gpt2 has only 1 model so most figures will be sparse; just verify no crash.
     assert isinstance(paths, list)

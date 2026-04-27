@@ -24,6 +24,9 @@ dependencies = [
     "numpy>=1.26,<2.2",
     "scipy>=1.12",
 
+    # Statistical modelling (mixed-effects regression for confound control)
+    "statsmodels>=0.14",
+
     # Data + analysis
     "datasets>=2.18",
     "huggingface-hub>=0.23",

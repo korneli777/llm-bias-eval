@@ -9,14 +9,14 @@ CONFIG = "configs/models.yaml"
 
 def test_registry_size():
     specs = load_registry(CONFIG)
-    assert len(specs) == 44, "expected 22 base+instruct pairs (44 specs)"
+    assert len(specs) == 66, "expected 33 base+instruct pairs (66 specs)"
 
 
 def test_registry_pairs():
     specs = load_registry(CONFIG)
     base = [s for s in specs if s.variant == "base"]
     inst = [s for s in specs if s.variant == "instruct"]
-    assert len(base) == len(inst) == 22
+    assert len(base) == len(inst) == 33
 
 
 def test_families_present():
@@ -37,7 +37,9 @@ def test_probing_subset_resolvable():
 def test_filter_by_family():
     specs = load_registry(CONFIG)
     mistral = list(filter_specs(specs, family="mistral"))
-    assert len(mistral) == 4  # 2 sizes × (base + instruct)
+    # 5 generations × (base + instruct), one entry each:
+    # v0.1 7B, v0.2 7B, v0.3 7B, Nemo 12B, Small 3 24B
+    assert len(mistral) == 10
     assert all(s.family == "mistral" for s in mistral)
 
 

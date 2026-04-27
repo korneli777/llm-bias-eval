@@ -74,6 +74,27 @@ def activation_dir(results_root: Path, spec: ModelSpec) -> Path:
     return Path(results_root) / "activations" / spec.short_name
 
 
+def projection_path(
+    results_root: Path, spec: ModelSpec, attribute: str, method: str
+) -> Path:
+    """Persisted erasure-projection matrix per (model, attribute, method)."""
+    return (
+        Path(results_root) / "intervention" / spec.short_name
+        / f"{attribute}__{method}.npz"
+    )
+
+
+def intervention_result_path(
+    results_root: Path, benchmark: str, spec: ModelSpec,
+    *, attribute: str, prompt_mode: str, method: str,
+) -> Path:
+    """Per-(model, attribute, prompt_mode, method) intervened benchmark JSON."""
+    return (
+        Path(results_root) / "intervention_results" / benchmark
+        / f"{spec.short_name}__{attribute}__{prompt_mode}__{method}.json"
+    )
+
+
 def write_json(path: Path, data: dict[str, Any]) -> None:
     """Atomic write — JSON to .tmp, then rename."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,6 +143,44 @@ def write_probe_result(
         },
         "attribute": attribute,
         "layers": layer_results,
+        "runtime": _runtime_metadata(),
+    }
+    write_json(path, payload)
+    logger.info("Wrote %s", path)
+    return path
+
+
+def write_intervention_result(
+    results_root: Path, result: BenchmarkResult, spec: ModelSpec,
+    *, attribute: str, method: str, layer_idx: int, sanity: dict[str, Any],
+) -> Path:
+    """Atomic JSON write for an intervened benchmark run.
+
+    Same payload shape as `write_benchmark_result` but with an extra
+    `intervention` block carrying the erasure metadata + sanity-check results.
+    """
+    path = intervention_result_path(
+        results_root, result.benchmark, spec,
+        attribute=attribute, prompt_mode=result.prompt_mode, method=method,
+    )
+    payload = {
+        "spec": {
+            "model_id": spec.model_id,
+            "family": spec.family,
+            "generation": spec.generation,
+            "size": spec.size,
+            "variant": spec.variant,
+            "num_params": spec.num_params,
+            "num_layers": spec.num_layers,
+            "hidden_size": spec.hidden_size,
+        },
+        "result": result.to_dict(),
+        "intervention": {
+            "attribute": attribute,
+            "method": method,
+            "layer_idx": int(layer_idx),
+            "sanity": sanity,
+        },
         "runtime": _runtime_metadata(),
     }
     write_json(path, payload)

@@ -1,6 +1,8 @@
 # Central model registry. Every script reads from this file.
-# 22 base ↔ instruct pairs = 44 checkpoints across 4 families.
+# 33 base ↔ instruct pairs = 66 checkpoints across 4 families.
 # All models load in full bfloat16 — no quantization.
+# Models ≥70B are intentionally excluded: they don't fit a single H100/A100
+# in bf16 and quantizing only the largest would introduce a confound.
 
 families:
   llama:
@@ -17,6 +19,13 @@ families:
             num_params: 7_000_000_000
             num_layers: 32
             hidden_size: 4096
+            dtype: "bfloat16"
+          - size: "13B"
+            base_id: "meta-llama/Llama-2-13b-hf"
+            instruct_id: "meta-llama/Llama-2-13b-chat-hf"
+            num_params: 13_000_000_000
+            num_layers: 40
+            hidden_size: 5120
             dtype: "bfloat16"
       - name: "Llama 3"
         release_date: "2024-04"
@@ -65,6 +74,13 @@ families:
       - name: "Qwen 2.5"
         release_date: "2024-09"
         models:
+          - size: "0.5B"
+            base_id: "Qwen/Qwen2.5-0.5B"
+            instruct_id: "Qwen/Qwen2.5-0.5B-Instruct"
+            num_params: 500_000_000
+            num_layers: 24
+            hidden_size: 896
+            dtype: "bfloat16"
           - size: "1.5B"
             base_id: "Qwen/Qwen2.5-1.5B"
             instruct_id: "Qwen/Qwen2.5-1.5B-Instruct"
@@ -104,6 +120,20 @@ families:
       - name: "Qwen 3"
         release_date: "2025-04"
         models:
+          - size: "0.6B"
+            base_id: "Qwen/Qwen3-0.6B-Base"
+            instruct_id: "Qwen/Qwen3-0.6B"
+            num_params: 600_000_000
+            num_layers: 28
+            hidden_size: 1024
+            dtype: "bfloat16"
+          - size: "1.7B"
+            base_id: "Qwen/Qwen3-1.7B-Base"
+            instruct_id: "Qwen/Qwen3-1.7B"
+            num_params: 1_700_000_000
+            num_layers: 28
+            hidden_size: 2048
+            dtype: "bfloat16"
           - size: "4B"
             base_id: "Qwen/Qwen3-4B-Base"
             instruct_id: "Qwen/Qwen3-4B"
@@ -118,6 +148,21 @@ families:
             num_layers: 36
             hidden_size: 4096
             dtype: "bfloat16"
+          - size: "14B"
+            base_id: "Qwen/Qwen3-14B-Base"
+            instruct_id: "Qwen/Qwen3-14B"
+            num_params: 14_000_000_000
+            num_layers: 40
+            hidden_size: 5120
+            dtype: "bfloat16"
+          - size: "32B"
+            base_id: "Qwen/Qwen3-32B-Base"
+            instruct_id: "Qwen/Qwen3-32B"
+            num_params: 32_000_000_000
+            num_layers: 64
+            hidden_size: 5120
+            dtype: "bfloat16"
+            notes: "~64GB in bf16, fits H100 80GB with batch_size=1"
 
   gemma:
     display_name: "Gemma"
@@ -173,8 +218,16 @@ families:
             notes: "~54GB in bf16, fits comfortably on A100 80GB"
       - name: "Gemma 3"
         release_date: "2025-03"
-        notes: "Multimodal models — load with Gemma3ForCausalLM for text-only mode."
+        notes: "1B is text-only; 4B/12B/27B are multimodal — load with Gemma3ForCausalLM for text-only mode."
         models:
+          - size: "1B"
+            base_id: "google/gemma-3-1b-pt"
+            instruct_id: "google/gemma-3-1b-it"
+            num_params: 1_000_000_000
+            num_layers: 26
+            hidden_size: 1152
+            dtype: "bfloat16"
+            model_class: "Gemma3ForCausalLM"
           - size: "4B"
             base_id: "google/gemma-3-4b-pt"
             instruct_id: "google/gemma-3-4b-it"
@@ -191,6 +244,15 @@ families:
             hidden_size: 3840
             dtype: "bfloat16"
             model_class: "Gemma3ForCausalLM"
+          - size: "27B"
+            base_id: "google/gemma-3-27b-pt"
+            instruct_id: "google/gemma-3-27b-it"
+            num_params: 27_000_000_000
+            num_layers: 62
+            hidden_size: 5376
+            dtype: "bfloat16"
+            model_class: "Gemma3ForCausalLM"
+            notes: "~54GB in bf16, fits H100 80GB"
       - name: "Gemma 4"
         release_date: "2026-04"
         notes: "Newest generation — load with Gemma4ForCausalLM for text-only mode. VERIFY HF IDs before relying on these (released ~April 2026)."
@@ -220,6 +282,16 @@ families:
             num_layers: 32
             hidden_size: 4096
             dtype: "bfloat16"
+      - name: "Mistral v0.2"
+        release_date: "2023-12"
+        models:
+          - size: "7B"
+            base_id: "mistralai/Mistral-7B-v0.2"
+            instruct_id: "mistralai/Mistral-7B-Instruct-v0.2"
+            num_params: 7_000_000_000
+            num_layers: 32
+            hidden_size: 4096
+            dtype: "bfloat16"
       - name: "Mistral v0.3"
         release_date: "2024-05"
         models:
@@ -230,10 +302,35 @@ families:
             num_layers: 32
             hidden_size: 4096
             dtype: "bfloat16"
+      - name: "Mistral Nemo"
+        release_date: "2024-07"
+        notes: "Mistral × NVIDIA collaboration; standard AutoModelForCausalLM."
+        models:
+          - size: "12B"
+            base_id: "mistralai/Mistral-Nemo-Base-2407"
+            instruct_id: "mistralai/Mistral-Nemo-Instruct-2407"
+            num_params: 12_000_000_000
+            num_layers: 40
+            hidden_size: 5120
+            dtype: "bfloat16"
+      - name: "Mistral Small 3"
+        release_date: "2025-01"
+        models:
+          - size: "24B"
+            base_id: "mistralai/Mistral-Small-24B-Base-2501"
+            instruct_id: "mistralai/Mistral-Small-24B-Instruct-2501"
+            num_params: 24_000_000_000
+            num_layers: 40
+            hidden_size: 5120
+            dtype: "bfloat16"
+            notes: "~48GB in bf16, fits H100 80GB"
 
-# Subset for linear probing. One representative pair per family.
+# Subset for linear probing + INLP/LEACE intervention.
+# Spans 4-24B (~0.8 orders of magnitude) so the latent-bias-vs-size story
+# can be told alongside the output-bias-vs-size regression.
 # For models >14B, stream activations to disk one layer at a time.
 probing_subset:
+  # 4-9B: original cross-family representative pairs
   - "meta-llama/Llama-2-7b-hf"
   - "meta-llama/Llama-2-7b-chat-hf"
   - "meta-llama/Llama-3.1-8B"
@@ -246,6 +343,11 @@ probing_subset:
   - "google/gemma-3-4b-it"
   - "mistralai/Mistral-7B-v0.3"
   - "mistralai/Mistral-7B-Instruct-v0.3"
+  # 13-24B: extension for size-axis breadth in the probing stage
+  - "meta-llama/Llama-2-13b-hf"
+  - "meta-llama/Llama-2-13b-chat-hf"
+  - "mistralai/Mistral-Small-24B-Base-2501"
+  - "mistralai/Mistral-Small-24B-Instruct-2501"
 
 # Used for the local smoke test — tiny CPU-runnable model.
 smoke_test_model: "sshleifer/tiny-gpt2"

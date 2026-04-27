@@ -75,23 +75,24 @@ def activation_dir(results_root: Path, spec: ModelSpec) -> Path:
 
 
 def projection_path(
-    results_root: Path, spec: ModelSpec, attribute: str, method: str
+    results_root: Path, spec: ModelSpec, attribute: str, method: str,
+    *, layer_idx: int,
 ) -> Path:
-    """Persisted erasure-projection matrix per (model, attribute, method)."""
+    """Persisted erasure-projection matrix per (model, attribute, method, layer)."""
     return (
         Path(results_root) / "intervention" / spec.short_name
-        / f"{attribute}__{method}.npz"
+        / f"{attribute}__{method}__L{layer_idx:02d}.npz"
     )
 
 
 def intervention_result_path(
     results_root: Path, benchmark: str, spec: ModelSpec,
-    *, attribute: str, prompt_mode: str, method: str,
+    *, attribute: str, prompt_mode: str, method: str, layer_idx: int,
 ) -> Path:
-    """Per-(model, attribute, prompt_mode, method) intervened benchmark JSON."""
+    """Per-(model, attr, prompt_mode, method, layer) intervened benchmark JSON."""
     return (
         Path(results_root) / "intervention_results" / benchmark
-        / f"{spec.short_name}__{attribute}__{prompt_mode}__{method}.json"
+        / f"{spec.short_name}__{attribute}__{prompt_mode}__{method}__L{layer_idx:02d}.json"
     )
 
 
@@ -161,7 +162,8 @@ def write_intervention_result(
     """
     path = intervention_result_path(
         results_root, result.benchmark, spec,
-        attribute=attribute, prompt_mode=result.prompt_mode, method=method,
+        attribute=attribute, prompt_mode=result.prompt_mode,
+        method=method, layer_idx=layer_idx,
     )
     payload = {
         "spec": {

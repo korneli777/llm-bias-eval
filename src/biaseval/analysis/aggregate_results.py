@@ -66,10 +66,9 @@ def aggregate_probe_results(results_root: Path) -> pd.DataFrame:
 def aggregate_intervention_results(results_root: Path) -> pd.DataFrame:
     """Long-format DataFrame of intervened benchmark scores.
 
-    One row per (model, benchmark, attribute, prompt_mode, method, metric).
-    Mirrors `aggregate_logit_results` so plots/regressions can reuse the same
-    code path, with extra columns: ``attribute``, ``method``, ``layer_idx``,
-    ``probe_acc_post`` (sanity check), ``perplexity_ratio``.
+    One row per (model, benchmark, attribute, prompt_mode, method, layer, metric).
+    Includes ``depth_frac = layer_idx / (num_layers - 1)`` so cross-model
+    layer comparisons are meaningful even when models have different depths.
     """
     rows: list[dict] = []
     base = results_root / "intervention_results"
@@ -84,6 +83,11 @@ def aggregate_intervention_results(results_root: Path) -> pd.DataFrame:
         sanity = intv.get("sanity", {})
         null = sanity.get("nullification", {})
         ppl = sanity.get("perplexity", {})
+        layer_idx = intv.get("layer_idx")
+        n_layers = spec.get("num_layers")
+        depth_frac = (layer_idx / max(n_layers - 1, 1)) if (
+            layer_idx is not None and n_layers
+        ) else None
         for metric, value in result["summary"].items():
             rows.append(
                 {
@@ -93,11 +97,13 @@ def aggregate_intervention_results(results_root: Path) -> pd.DataFrame:
                     "size": spec["size"],
                     "variant": spec["variant"],
                     "num_params": spec["num_params"],
+                    "num_layers": n_layers,
                     "benchmark": result["benchmark"],
                     "prompt_mode": result.get("prompt_mode", "raw"),
                     "attribute": intv.get("attribute"),
                     "method": intv.get("method"),
-                    "layer_idx": intv.get("layer_idx"),
+                    "layer_idx": layer_idx,
+                    "depth_frac": depth_frac,
                     "probe_acc_post": null.get("post_intervention_probe_accuracy"),
                     "probe_acc_passed": null.get("passed"),
                     "perplexity_ratio": ppl.get("ratio"),

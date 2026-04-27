@@ -182,8 +182,124 @@ def fig_iat_by_category(logit_df: pd.DataFrame, figures_dir: Path) -> Path:
     return _save(fig, figures_dir / "fig8_iat_by_category.png")
 
 
+def fig_intervention_by_layer(
+    logit_df: pd.DataFrame, intv_df: pd.DataFrame, figures_dir: Path,
+) -> Path:
+    """Bias-score delta (baseline − intervened) vs intervention depth.
+
+    For each (model, attribute, method) line, plots how much the headline
+    bias score drops when we ablate the latent direction at each depth.
+    The depth at which the curve bottoms-out is the **functional locus**
+    of demographic representation — distinct from the layer where the
+    probe peaks (which is biased toward early layers under keyword labels).
+    """
+    if intv_df.empty or logit_df.empty:
+        return Path()
+    headline = {
+        "crows_pairs": "overall",
+        "stereoset": "overall_SS",
+    }
+    # Baseline = same model, same benchmark, same prompt_mode, NO intervention.
+    base = (
+        logit_df[logit_df.apply(lambda r: r["metric"] == headline.get(r["benchmark"]), axis=1)]
+        .rename(columns={"value": "bias_baseline"})
+        [["model_id", "benchmark", "prompt_mode", "bias_baseline"]]
+    )
+    intv = intv_df[intv_df.apply(lambda r: r["metric"] == headline.get(r["benchmark"]), axis=1)].copy()
+    if intv.empty:
+        return Path()
+    intv = intv.rename(columns={"value": "bias_intervened"})
+    df = intv.merge(base, on=["model_id", "benchmark", "prompt_mode"], how="left")
+    df["bias_delta"] = df["bias_baseline"] - df["bias_intervened"]
+    df["family_size"] = df["family"] + " " + df["size"]
+
+    g = sns.relplot(
+        data=df, x="depth_frac", y="bias_delta",
+        hue="variant", style="method",
+        col="attribute", row="benchmark",
+        kind="line", marker="o", height=3.2, aspect=1.4,
+        facet_kws={"sharey": False},
+    )
+    for ax in g.axes.flatten():
+        ax.axhline(0, color="grey", lw=0.5)
+        ax.set_xlim(-0.05, 1.05)
+    g.set_axis_labels("Intervention depth (fraction of layers)",
+                      "Δ bias  (baseline − intervened)")
+    g.fig.suptitle("Causal effect of latent-direction ablation by intervention depth", y=1.02)
+    return _save(g.fig, figures_dir / "fig9_intervention_by_layer.png")
+
+
+def fig_probe_vs_intervention_loci(
+    probe_df: pd.DataFrame, intv_df: pd.DataFrame, logit_df: pd.DataFrame,
+    figures_dir: Path,
+) -> Path:
+    """Probe-accuracy curve vs intervention-effect curve, on shared depth axis.
+
+    The HEADLINE FIGURE for the probe-locus dissociation argument:
+    if the probe peaks at depth ~0.05 (surface keyword detection) but the
+    intervention curve dips at depth ~0.5 (where the model actually uses
+    the demographic info), the two loci are **dissociated** and probe-peak
+    layer selection is methodologically wrong.
+    """
+    if probe_df.empty or intv_df.empty:
+        return Path()
+
+    # Probe curve: mean accuracy vs normalized layer, per attribute, per variant.
+    probe_curve = (
+        probe_df.assign(metric="probe_accuracy")
+        .rename(columns={"layer_normalized": "depth_frac",
+                         "mean_accuracy": "value"})
+        [["depth_frac", "value", "attribute", "variant", "metric"]]
+    )
+
+    # Intervention curve: mean Δ bias vs depth (CrowS-Pairs raw, INLP only — for clarity).
+    base = (
+        logit_df[(logit_df["benchmark"] == "crows_pairs") & (logit_df["metric"] == "overall")
+                 & (logit_df["prompt_mode"] == "raw")]
+        .rename(columns={"value": "bias_baseline"})
+        [["model_id", "bias_baseline"]]
+    )
+    intv = intv_df[
+        (intv_df["benchmark"] == "crows_pairs") & (intv_df["metric"] == "overall")
+        & (intv_df["prompt_mode"] == "raw") & (intv_df["method"] == "inlp")
+    ].copy()
+    if intv.empty or base.empty:
+        return Path()
+    intv = intv.rename(columns={"value": "bias_intervened"}).merge(base, on="model_id", how="left")
+    intv["delta"] = intv["bias_baseline"] - intv["bias_intervened"]
+    intv_curve = (
+        intv.assign(metric="intervention_effect")
+        .rename(columns={"delta": "value"})
+        [["depth_frac", "value", "attribute", "variant", "metric"]]
+    )
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+    # Left: probe accuracy.
+    sns.lineplot(data=probe_curve, x="depth_frac", y="value",
+                 hue="variant", style="attribute", marker="o", ax=axes[0],
+                 errorbar="sd")
+    axes[0].axhline(0.5, ls="--", color="grey")
+    axes[0].set_xlabel("Layer (depth fraction)")
+    axes[0].set_ylabel("Probe accuracy")
+    axes[0].set_title("Where the demographic info EXISTS\n(probe accuracy by layer)")
+
+    # Right: intervention effect.
+    sns.lineplot(data=intv_curve, x="depth_frac", y="value",
+                 hue="variant", style="attribute", marker="o", ax=axes[1],
+                 errorbar="sd")
+    axes[1].axhline(0, ls="--", color="grey")
+    axes[1].set_xlabel("Intervention depth (fraction)")
+    axes[1].set_ylabel("Δ CrowS bias  (baseline − intervened)")
+    axes[1].set_title("Where the model USES the info\n(intervention effect on output bias)")
+
+    fig.suptitle("Dissociation: probe-accuracy locus ≠ causal-effect locus", y=1.02)
+    fig.tight_layout()
+    return _save(fig, figures_dir / "fig10_probe_vs_intervention_loci.png")
+
+
 def generate_all(
     logit_df: pd.DataFrame, probe_df: pd.DataFrame, figures_dir: Path,
+    intv_df: pd.DataFrame | None = None,
 ) -> list[Path]:
     """Run every figure function and return the paths actually written."""
     figures_dir = Path(figures_dir)
@@ -217,4 +333,18 @@ def generate_all(
                 paths.append(p)
         except Exception as exc:  # pragma: no cover
             logger.error("fig_expressed_vs_encoded failed: %s", exc)
+    if intv_df is not None and not intv_df.empty:
+        try:
+            p = fig_intervention_by_layer(logit_df, intv_df, figures_dir)
+            if p and p.exists():
+                paths.append(p)
+        except Exception as exc:  # pragma: no cover
+            logger.error("fig_intervention_by_layer failed: %s", exc)
+        if not probe_df.empty:
+            try:
+                p = fig_probe_vs_intervention_loci(probe_df, intv_df, logit_df, figures_dir)
+                if p and p.exists():
+                    paths.append(p)
+            except Exception as exc:  # pragma: no cover
+                logger.error("fig_probe_vs_intervention_loci failed: %s", exc)
     return paths

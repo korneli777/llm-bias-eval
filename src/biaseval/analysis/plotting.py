@@ -789,6 +789,98 @@ def fig_probe_direction_rotation(
     return _save(g.fig, figures_dir / "fig15_probe_direction_rotation.png")
 
 
+# ---------------------------------------------------------------------------
+# Multilingual statistical figures (Bite 4 of the multilingual extension).
+# ---------------------------------------------------------------------------
+
+
+def fig_multilingual_significance_heatmap(
+    pair_sig_per_lang_df: pd.DataFrame, figures_dir: Path,
+) -> Path:
+    """Per-pair × per-language Cohen's d, with ★ / ★★ markers from Holm.
+
+    Headline statistical multilingual figure. Inputs: long-format DataFrame
+    from `pair_significance_per_language()` with one row per (pair, language).
+    Cell value = `cohens_d_paired`. Annotation = numeric d plus ★ / ★★ if
+    the row passes Holm at α=0.05 / α=0.0025 within its language family.
+    """
+    if pair_sig_per_lang_df is None or pair_sig_per_lang_df.empty:
+        return Path()
+    df = pair_sig_per_lang_df.copy()
+    df["pair_label"] = (df["family"].astype(str) + "/"
+                        + df["generation"].astype(str) + "/"
+                        + df["size"].astype(str))
+
+    pivot_d = df.pivot(index="pair_label", columns="language",
+                       values="cohens_d_paired")
+    # Order languages canonically and pairs by overall mean |d| desc.
+    lang_order = [c for c in ("en", "fr", "es", "de", "pt", "it")
+                  if c in pivot_d.columns]
+    pivot_d = pivot_d[lang_order] if lang_order else pivot_d
+    overall_order = (pivot_d.abs().mean(axis=1).sort_values(ascending=False).index)
+    pivot_d = pivot_d.loc[overall_order]
+
+    # Annotation: "+0.32 ★★" etc.
+    def _star(row, col):
+        sub = df[(df["pair_label"] == row) & (df["language"] == col)]
+        if sub.empty:
+            return ""
+        d = sub["cohens_d_paired"].iloc[0]
+        if pd.isna(d):
+            return ""
+        s = ""
+        if bool(sub["reject_strict"].iloc[0]):
+            s = " ★★"
+        elif bool(sub["reject_holm"].iloc[0]):
+            s = " ★"
+        return f"{d:+.2f}{s}"
+
+    annot = pd.DataFrame(
+        [[_star(r, c) for c in pivot_d.columns] for r in pivot_d.index],
+        index=pivot_d.index, columns=pivot_d.columns,
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(1.4 * len(pivot_d.columns) + 4, max(3, 0.4 * len(pivot_d))),
+    )
+    sns.heatmap(
+        pivot_d, annot=annot, fmt="", cmap="vlag", center=0,
+        vmin=-1.0, vmax=1.0, ax=ax,
+        cbar_kws={"label": "Cohen's d (paired) — instruct vs base"},
+    )
+    ax.set_title(
+        "Multilingual alignment effect (paired d on CrowS-Pairs)\n"
+        "★ = survives Holm at α=0.05; ★★ = also survives α=0.0025"
+    )
+    ax.set_xlabel("Language")
+    ax.set_ylabel("Pair (sorted by mean |d|)")
+    return _save(fig, figures_dir / "fig19_multilingual_significance_heatmap.png")
+
+
+def fig_multilingual_consistency_matrix(
+    lang_corr_df: pd.DataFrame, figures_dir: Path,
+) -> Path:
+    """Spearman correlation of paired Δ across languages.
+
+    Inputs: the second DataFrame returned by `cross_language_consistency`.
+    Off-diagonal cells near +1 → alignment effect transfers across languages;
+    near 0 → effect is language-specific. The methodological complement to
+    fig19's per-pair view.
+    """
+    if lang_corr_df is None or lang_corr_df.empty:
+        return Path()
+    fig, ax = plt.subplots(figsize=(1.0 * len(lang_corr_df.columns) + 3,
+                                    1.0 * len(lang_corr_df) + 2))
+    sns.heatmap(
+        lang_corr_df, annot=True, fmt=".2f", cmap="vlag", center=0,
+        vmin=-1, vmax=1, ax=ax,
+        cbar_kws={"label": "Spearman ρ"},
+    )
+    ax.set_title("Cross-language consistency of the alignment effect\n"
+                 "(Spearman of paired Δ across pairs, per language)")
+    return _save(fig, figures_dir / "fig20_multilingual_consistency.png")
+
+
 def generate_all(
     logit_df: pd.DataFrame, probe_df: pd.DataFrame, figures_dir: Path,
     intv_df: pd.DataFrame | None = None,
@@ -796,6 +888,9 @@ def generate_all(
     pair_sig_df: pd.DataFrame | None = None,
     consistency_df: pd.DataFrame | None = None,
     direction_cosines_df: pd.DataFrame | None = None,
+    pair_sig_per_lang_df: pd.DataFrame | None = None,
+    lang_consistency_df: pd.DataFrame | None = None,
+    lang_corr_df: pd.DataFrame | None = None,
     results_dir: Path | None = None,
     registry_pairs: list[tuple[str, str, str, str, str]] | None = None,
 ) -> list[Path]:
@@ -805,6 +900,8 @@ def generate_all(
         pair_sig_df          — for `fig_alignment_delta_forest`
         consistency_df       — for `fig_cross_benchmark_agreement`
         direction_cosines_df — for `fig_probe_direction_rotation`
+        pair_sig_per_lang_df — for `fig_multilingual_significance_heatmap`
+        lang_corr_df         — for `fig_multilingual_consistency_matrix`
         results_dir + registry_pairs — for the Δ-based correlation in
                           `fig_benchmark_correlation`. Falls back to raw-score
                           Pearson if either is None.
@@ -872,6 +969,25 @@ def generate_all(
                 paths.append(p)
         except Exception as exc:  # pragma: no cover
             logger.error("fig_probe_direction_rotation failed: %s", exc)
+
+    # Multilingual statistical figures (need pair_significance_per_language +
+    # cross_language_consistency to have been built).
+    if pair_sig_per_lang_df is not None and not pair_sig_per_lang_df.empty:
+        try:
+            p = fig_multilingual_significance_heatmap(
+                pair_sig_per_lang_df, figures_dir,
+            )
+            if p and p.exists():
+                paths.append(p)
+        except Exception as exc:  # pragma: no cover
+            logger.error("fig_multilingual_significance_heatmap failed: %s", exc)
+    if lang_corr_df is not None and not lang_corr_df.empty:
+        try:
+            p = fig_multilingual_consistency_matrix(lang_corr_df, figures_dir)
+            if p and p.exists():
+                paths.append(p)
+        except Exception as exc:  # pragma: no cover
+            logger.error("fig_multilingual_consistency_matrix failed: %s", exc)
 
     # Probing figures.
     if not probe_df.empty:

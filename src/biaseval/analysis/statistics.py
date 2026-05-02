@@ -203,18 +203,29 @@ def holm_bonferroni(p_values: dict[str, float], alpha: float = 0.05) -> dict[str
     return out
 
 
+def _crows_folder(language: str) -> str:
+    """Result-folder name: `crows_pairs` (en) or `crows_pairs_<lang>` (else).
+
+    Mirrors the producer-side convention in `scripts/run_logit_benchmarks.py`.
+    """
+    return "crows_pairs" if language == "en" else f"crows_pairs_{language}"
+
+
 def _load_crows_per_example_outcomes(
     results_dir: Path, model_id: str, prompt_mode: str = "raw",
-    *, scoring: str = "norm",
+    *, scoring: str = "norm", language: str = "en",
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """Return (pair_ids, outcomes) for CrowS-Pairs raw mode for one model.
 
     scoring='norm' (default) reads `stereo_won` (length-normalised), 'raw'
     reads `stereo_won_raw` (lm-eval-harness convention). Returns None if
     the file doesn't exist or the requested scoring isn't available.
+    language defaults to 'en'; pass 'fr', 'es', 'de', 'pt', 'it' for the
+    BigScienceBiasEval multilingual mirrors.
     """
     short = model_id.replace("/", "__")
-    fp = results_dir / "logit_scores" / "crows_pairs" / f"{short}__{prompt_mode}.json"
+    fp = (results_dir / "logit_scores" / _crows_folder(language)
+          / f"{short}__{prompt_mode}.json")
     if not fp.exists():
         return None
     with open(fp) as f:
@@ -232,6 +243,7 @@ def _load_crows_per_example_outcomes(
 def pair_significance_table(
     results_dir: Path, registry_pairs: list[tuple[str, str, str, str, str]],
     *, prompt_mode: str = "raw", scoring: str = "norm",
+    language: str = "en",
     n_perm: int = 10000, n_boot: int = 10000, seed: int = 42,
 ) -> pd.DataFrame:
     """Per-pair significance table: the headline statistical evidence row.
@@ -245,8 +257,12 @@ def pair_significance_table(
     """
     rows: list[dict[str, Any]] = []
     for base_id, instruct_id, family, generation, size in registry_pairs:
-        b = _load_crows_per_example_outcomes(results_dir, base_id, prompt_mode, scoring=scoring)
-        i = _load_crows_per_example_outcomes(results_dir, instruct_id, prompt_mode, scoring=scoring)
+        b = _load_crows_per_example_outcomes(
+            results_dir, base_id, prompt_mode, scoring=scoring, language=language,
+        )
+        i = _load_crows_per_example_outcomes(
+            results_dir, instruct_id, prompt_mode, scoring=scoring, language=language,
+        )
         if b is None or i is None:
             continue
         b_ids, b_out = b
@@ -306,6 +322,39 @@ def pair_significance_table(
             .drop(columns="_abs_d")
             .reset_index(drop=True))
     return df
+
+
+def pair_significance_per_language(
+    results_dir: Path, registry_pairs: list[tuple[str, str, str, str, str]],
+    languages: tuple[str, ...] = ("en", "fr", "es", "de", "pt", "it"),
+    *, prompt_mode: str = "raw", scoring: str = "norm",
+    n_perm: int = 10000, n_boot: int = 10000, seed: int = 42,
+) -> pd.DataFrame:
+    """Run pair_significance_table once per language; return long-format frame.
+
+    Adds a `language` column and stacks the per-language tables. Holm
+    correction is applied within each language (so ★ markers compare to the
+    same family of pairs in that language). Languages whose results aren't
+    on disk are silently skipped — defensive against partial multilingual
+    sweeps.
+    """
+    parts: list[pd.DataFrame] = []
+    for lang in languages:
+        df = pair_significance_table(
+            results_dir, registry_pairs,
+            prompt_mode=prompt_mode, scoring=scoring, language=lang,
+            n_perm=n_perm, n_boot=n_boot, seed=seed,
+        )
+        if df.empty:
+            continue
+        df = df.assign(language=lang)
+        parts.append(df)
+    if not parts:
+        return pd.DataFrame()
+    out = pd.concat(parts, ignore_index=True)
+    # Move `language` to the front for readability.
+    cols = ["language"] + [c for c in out.columns if c != "language"]
+    return out[cols]
 
 
 def _load_summary_metric(
@@ -396,6 +445,71 @@ def cross_benchmark_consistency(
 
     # Spearman across benchmarks: each pair is one observation.
     delta_cols = [f"delta_{b}" for b in benchmarks if f"delta_{b}" in consistency_df.columns]
+    if consistency_df.empty or len(delta_cols) < 2:
+        corr_df = pd.DataFrame()
+    else:
+        corr_df = consistency_df[delta_cols].corr(method="spearman")
+        corr_df.index = [c.replace("delta_", "") for c in corr_df.index]
+        corr_df.columns = [c.replace("delta_", "") for c in corr_df.columns]
+    return consistency_df, corr_df
+
+
+def cross_language_consistency(
+    results_dir: Path,
+    registry_pairs: list[tuple[str, str, str, str, str]],
+    languages: tuple[str, ...] = ("en", "fr", "es", "de", "pt", "it"),
+    *, prompt_mode: str = "raw",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Cross-language agreement on the alignment effect (multilingual robustness).
+
+    Mirrors `cross_benchmark_consistency` but iterates languages on a single
+    benchmark (CrowS-Pairs). For each (base, instruct) pair, computes
+    Δ_lang = instruct_score − base_score on the multilingual CrowS-Pairs
+    overall metric (lower = less biased, so Δ < 0 → instruct less biased
+    in that language).
+
+    Returns
+    -------
+    (consistency_df, corr_df)
+        consistency_df: one row per pair with columns
+            family, generation, size, base_id, instruct_id,
+            delta_<lang> for each language, n_languages_present,
+            n_languages_agreeing, all_agree
+        corr_df: Spearman correlation matrix of the per-pair Δ across
+            languages (each pair = one observation). Off-diagonal cells
+            near +1 → alignment effect is consistent across languages;
+            near 0 → effect is language-specific (worth a methodological
+            note in the thesis).
+    """
+    rows: list[dict[str, Any]] = []
+    for base_id, instruct_id, family, generation, size in registry_pairs:
+        row: dict[str, Any] = {
+            "family": family, "generation": generation, "size": size,
+            "base_id": base_id, "instruct_id": instruct_id,
+        }
+        deltas: list[float] = []
+        for lang in languages:
+            folder = _crows_folder(lang)
+            b = _load_summary_metric(results_dir, folder, base_id, "overall",
+                                     prompt_mode=prompt_mode)
+            i = _load_summary_metric(results_dir, folder, instruct_id, "overall",
+                                     prompt_mode=prompt_mode)
+            if b is None or i is None:
+                row[f"delta_{lang}"] = float("nan")
+                continue
+            d = i - b  # CrowS overall: lower is less biased, no transform.
+            row[f"delta_{lang}"] = d
+            deltas.append(d)
+        present = [d for d in deltas if not np.isnan(d)]
+        row["n_languages_present"] = len(present)
+        row["n_languages_agreeing"] = sum(1 for d in present if d < 0)
+        row["all_agree"] = (len(present) == len(languages)
+                            and row["n_languages_agreeing"] == len(languages))
+        rows.append(row)
+
+    consistency_df = pd.DataFrame(rows)
+    delta_cols = [f"delta_{lang}" for lang in languages
+                  if f"delta_{lang}" in consistency_df.columns]
     if consistency_df.empty or len(delta_cols) < 2:
         corr_df = pd.DataFrame()
     else:

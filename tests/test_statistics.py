@@ -12,7 +12,9 @@ from biaseval.analysis.statistics import (
     cohens_d_label,
     cohens_d_paired,
     cross_benchmark_consistency,
+    cross_language_consistency,
     holm_bonferroni,
+    pair_significance_per_language,
     pair_significance_table,
     paired_permutation_test,
 )
@@ -193,6 +195,91 @@ def test_cohens_d_label_bands():
     assert cohens_d_label(float("nan")) == "n/a"
 
 
+def test_pair_significance_table_routes_language_to_correct_folder(tmp_path):
+    """Language='fr' must read from `crows_pairs_fr/`, not `crows_pairs/`."""
+    from biaseval.analysis.statistics import _load_crows_per_example_outcomes
+
+    rng = np.random.default_rng(7)
+    pair = ("models/x-base", "models/x-inst", "fakefam", "G1", "7B")
+
+    def write(model_id: str, folder: str, stereo_rate: float):
+        outcomes = (rng.random(800) < stereo_rate).astype(int)
+        per_ex = [
+            {"pair_id": k, "bias_type": "race-color", "direction": "stereo",
+             "log_prob_stereo": -50.0, "log_prob_anti": -51.0,
+             "stereo_won": bool(outcomes[k]), "stereo_won_raw": bool(outcomes[k])}
+            for k in range(len(outcomes))
+        ]
+        out = (tmp_path / "logit_scores" / folder
+               / f"{model_id.replace('/', '__')}__raw.json")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({
+            "spec": {"model_id": model_id, "family": "fakefam"},
+            "result": {"benchmark": folder, "summary": {"overall": 50.0},
+                       "per_example": per_ex},
+            "runtime": {},
+        }))
+
+    # Write wildly different distributions to en vs fr to make routing visible.
+    write(pair[0], "crows_pairs",    0.50)  # en base
+    write(pair[1], "crows_pairs",    0.50)  # en inst — null effect
+    write(pair[0], "crows_pairs_fr", 0.80)  # fr base
+    write(pair[1], "crows_pairs_fr", 0.40)  # fr inst — large effect
+
+    en_df = pair_significance_table(tmp_path, [pair], language="en",
+                                    n_perm=500, n_boot=500, seed=42)
+    fr_df = pair_significance_table(tmp_path, [pair], language="fr",
+                                    n_perm=500, n_boot=500, seed=42)
+    assert abs(en_df.iloc[0]["delta"]) < 5    # null
+    assert fr_df.iloc[0]["delta"] < -30       # large neg
+
+    # And the helper itself should resolve the right path.
+    en_loaded = _load_crows_per_example_outcomes(tmp_path, pair[0], language="en")
+    fr_loaded = _load_crows_per_example_outcomes(tmp_path, pair[0], language="fr")
+    assert en_loaded is not None and fr_loaded is not None
+    assert en_loaded[1].mean() != fr_loaded[1].mean()
+
+
+def test_pair_significance_per_language_stacks_and_skips_missing(tmp_path):
+    """Per-language wrapper: stacks present languages, silently skips missing."""
+    rng = np.random.default_rng(11)
+    pair = ("models/x-base", "models/x-inst", "fakefam", "G1", "7B")
+
+    def write(model_id: str, folder: str, stereo_rate: float):
+        outcomes = (rng.random(800) < stereo_rate).astype(int)
+        per_ex = [
+            {"pair_id": k, "bias_type": "race-color", "direction": "stereo",
+             "log_prob_stereo": -50.0, "log_prob_anti": -51.0,
+             "stereo_won": bool(outcomes[k]), "stereo_won_raw": bool(outcomes[k])}
+            for k in range(len(outcomes))
+        ]
+        out = (tmp_path / "logit_scores" / folder
+               / f"{model_id.replace('/', '__')}__raw.json")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({
+            "spec": {"model_id": model_id, "family": "fakefam"},
+            "result": {"benchmark": folder, "summary": {"overall": 50.0},
+                       "per_example": per_ex},
+            "runtime": {},
+        }))
+
+    # Two languages present (en + de), one missing (fr) → should skip fr cleanly.
+    write(pair[0], "crows_pairs",    0.50)
+    write(pair[1], "crows_pairs",    0.50)
+    write(pair[0], "crows_pairs_de", 0.65)
+    write(pair[1], "crows_pairs_de", 0.55)
+
+    df = pair_significance_per_language(
+        tmp_path, [pair], languages=("en", "fr", "de"),
+        n_perm=500, n_boot=500, seed=42,
+    )
+    assert set(df["language"]) == {"en", "de"}  # fr silently skipped
+    assert df.columns[0] == "language"          # language is first column
+    # Each language gets its own row for the same pair.
+    assert (df["language"] == "en").sum() == 1
+    assert (df["language"] == "de").sum() == 1
+
+
 def test_pair_significance_table_handles_missing_files(tmp_path):
     """Pairs whose files don't exist are simply skipped."""
     df = pair_significance_table(
@@ -238,6 +325,60 @@ def test_cross_benchmark_consistency_counts_agreement(tmp_path):
     assert row["delta_iat"] == pytest.approx(-0.40)
     # 1 pair → corr matrix is all NaN (only one observation), but shape is right.
     assert corr.shape == (4, 4)
+
+
+def _write_crows_summary(tmp_path, folder, model_id, summary):
+    """Write a summary-only CrowS json (good enough for cross_language_consistency)."""
+    short = model_id.replace("/", "__")
+    fp = tmp_path / "logit_scores" / folder / f"{short}__raw.json"
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    fp.write_text(json.dumps({
+        "spec": {"model_id": model_id, "family": "fakefam"},
+        "result": {"benchmark": folder, "summary": summary, "per_example": [],
+                   "prompt_mode": "raw"},
+        "runtime": {},
+    }))
+
+
+def test_cross_language_consistency_counts_agreement(tmp_path):
+    """Pair where all 3 languages show instruct less biased → all_agree=True."""
+    pair = ("models/x-base", "models/x-inst", "fakefam", "G1", "7B")
+    for lang_folder, base_v, inst_v in [
+        ("crows_pairs",    70.0, 60.0),
+        ("crows_pairs_fr", 65.0, 55.0),
+        ("crows_pairs_de", 68.0, 62.0),
+    ]:
+        _write_crows_summary(tmp_path, lang_folder, pair[0], {"overall": base_v})
+        _write_crows_summary(tmp_path, lang_folder, pair[1], {"overall": inst_v})
+
+    cons, corr = cross_language_consistency(
+        tmp_path, [pair], languages=("en", "fr", "de"),
+    )
+    row = cons.iloc[0]
+    assert row["n_languages_present"] == 3
+    assert row["n_languages_agreeing"] == 3
+    assert row["all_agree"]
+    assert row["delta_en"] == -10.0
+    assert row["delta_fr"] == -10.0
+    assert row["delta_de"] == -6.0
+    # 1 pair → corr matrix shape is right but values are NaN.
+    assert corr.shape == (3, 3)
+
+
+def test_cross_language_consistency_handles_partial_languages(tmp_path):
+    """Languages whose JSONs are missing get NaN Δ and don't break the call."""
+    pair = ("models/x-base", "models/x-inst", "fakefam", "G1", "7B")
+    _write_crows_summary(tmp_path, "crows_pairs",    pair[0], {"overall": 70.0})
+    _write_crows_summary(tmp_path, "crows_pairs",    pair[1], {"overall": 60.0})
+    # fr + de absent — should be NaN, all_agree=False.
+    cons, _ = cross_language_consistency(
+        tmp_path, [pair], languages=("en", "fr", "de"),
+    )
+    row = cons.iloc[0]
+    assert row["n_languages_present"] == 1
+    assert not row["all_agree"]
+    assert np.isnan(row["delta_fr"])
+    assert np.isnan(row["delta_de"])
 
 
 def test_cross_benchmark_consistency_handles_disagreement(tmp_path):

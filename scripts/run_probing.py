@@ -191,6 +191,9 @@ def main() -> int:
                     layer_results = train_probes_all_layers(
                         sliced_dir, labels, num_layers, attr, cv_folds=cv_folds,
                         seed=args.seed,
+                        # Save directions in the parent activation dir so the
+                        # `load_probe_directions` aggregator finds them.
+                        direction_save_dir=adir,
                     )
                     if suffix:
                         # Manual write to the masked path (mirrors write_probe_result shape).

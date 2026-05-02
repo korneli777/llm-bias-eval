@@ -86,9 +86,17 @@ seed: 42
 
 # Probing config.
 probing:
-  pool: "mean"           # "mean" or "last"
+  pool: "last"           # "mean" or "last" — Bouchouchi 2026 uses last-token
   cv_folds: 5
-  attributes: ["gender", "race"]
+  # Following Bouchouchi 2026 we restrict probing to gender. There is no
+  # clean neutral-prompt design for race in autoregressive LMs: any candidate
+  # either references the demographic group explicitly (keyword leakage at
+  # the token level) or relies on demographic-coded surface forms like names
+  # or dialect words (still keyword leakage). Race results are reported only
+  # at the behavioral level (CrowS race-color, BBQ Race_x_SES, IAT race
+  # category). Pass `--attributes race` explicitly if you need the appendix
+  # numbers — `build_probe_dataset("race")` is still callable.
+  attributes: ["gender"]
   max_sentences: 1000    # cap activations cached per model
 
 # Statistics.

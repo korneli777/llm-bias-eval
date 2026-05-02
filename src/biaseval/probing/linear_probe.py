@@ -56,9 +56,18 @@ def train_probes_all_layers(
     cv_folds: int = 5,
     seed: int = 42,
     save_directions: bool = True,
+    direction_save_dir: str | Path | None = None,
 ) -> list[dict]:
-    """Iterate every layer's .npy file, train a probe, save direction vector."""
+    """Iterate every layer's .npy file, train a probe, save direction vector.
+
+    `direction_save_dir` overrides where `direction_<attr>.npy` is written.
+    Defaults to `activation_dir`. Callers that pass a per-attribute *sliced*
+    activation_dir (e.g. `<model>/_gender/`) should pass the *parent* dir
+    here so `aggregate_results.load_probe_directions` (which globs
+    `<model>/direction_*.npy`) actually finds the file.
+    """
     activation_dir = Path(activation_dir)
+    save_dir = Path(direction_save_dir) if direction_save_dir is not None else activation_dir
     results: list[dict] = []
     if save_directions:
         directions = np.zeros((num_layers, np.load(activation_dir / "layer_0.npy").shape[1]),
@@ -77,5 +86,6 @@ def train_probes_all_layers(
         if save_directions:
             directions[layer_idx] = mean_difference_direction(X, labels)
     if save_directions:
-        np.save(activation_dir / f"direction_{attribute_name}.npy", directions)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        np.save(save_dir / f"direction_{attribute_name}.npy", directions)
     return results

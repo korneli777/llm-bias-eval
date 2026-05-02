@@ -67,3 +67,32 @@ def test_mean_difference_direction_handles_single_class():
     y = np.zeros(10, dtype=int)
     d = mean_difference_direction(X, y)
     assert (d == 0).all()
+
+
+def test_train_probes_writes_directions_to_explicit_save_dir(tmp_path):
+    """Regression: directions must land in `direction_save_dir`, not in the
+    sliced activation dir, so `load_probe_directions` can find them."""
+    from biaseval.probing.linear_probe import train_probes_all_layers
+
+    parent = tmp_path / "activations" / "fake__model"
+    sliced = parent / "_gender"
+    sliced.mkdir(parents=True)
+    rng = np.random.default_rng(0)
+    n_layers = 3
+    for li in range(n_layers):
+        X = np.concatenate(
+            [rng.normal(0, 1, (12, 8)), rng.normal(2, 1, (12, 8))]
+        ).astype(np.float32)
+        np.save(sliced / f"layer_{li}.npy", X)
+    labels = np.array([0] * 12 + [1] * 12)
+
+    train_probes_all_layers(
+        sliced, labels, n_layers, "gender",
+        cv_folds=3, seed=0, save_directions=True,
+        direction_save_dir=parent,
+    )
+
+    # Direction must be in the parent (where load_probe_directions globs),
+    # NOT in the sliced subdir (the bug we hit in MVP).
+    assert (parent / "direction_gender.npy").exists()
+    assert not (sliced / "direction_gender.npy").exists()

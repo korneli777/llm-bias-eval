@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from biaseval.benchmarks import bbq, crows_pairs, iat, stereoset
+from biaseval.benchmarks import bbq, crows_pairs, iat, implicit_explicit, stereoset
 from biaseval.io import write_benchmark_result
 from biaseval.model_loader import ModelSpec, load_model, unload_model
 
@@ -31,17 +31,27 @@ def model_and_tokenizer():
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("prompt_mode", ["raw", "instruct"])
+@pytest.mark.parametrize("prompt_mode", ["raw", "instruct", "jailbreak"])
 def test_crows_pairs_smoke(model_and_tokenizer, tmp_path, prompt_mode):
     model, tokenizer = model_and_tokenizer
     result = crows_pairs.run(model, tokenizer, TINY_SPEC, prompt_mode=prompt_mode, limit=4)
     assert result.benchmark == "crows_pairs"
     assert result.prompt_mode == prompt_mode
+    assert result.metadata.get("language") == "en"
     assert "overall" in result.summary
     assert len(result.per_example) == 4
     out = write_benchmark_result(tmp_path, result, TINY_SPEC)
     assert out.exists()
     assert out.stem.endswith(f"__{prompt_mode}")
+
+
+@pytest.mark.integration
+def test_crows_pairs_unsupported_language_errors(model_and_tokenizer):
+    """Non-supported language code must raise so we can't silently run garbage."""
+    model, tokenizer = model_and_tokenizer
+    with pytest.raises(ValueError, match="Unsupported language"):
+        crows_pairs.run(model, tokenizer, TINY_SPEC, prompt_mode="raw",
+                        language="zz", limit=4)
 
 
 @pytest.mark.integration
@@ -75,6 +85,26 @@ def test_iat_smoke(model_and_tokenizer, prompt_mode):
     assert result.prompt_mode == prompt_mode
     assert any(k.endswith("_d") for k in result.summary)
     assert "overall_abs_d" in result.summary
+    # Both d-stats reported per test (Step 4: WEAT-on-embeddings alongside logp d).
+    assert any(k.endswith("_d_weat_embed") for k in result.summary)
+    assert "overall_abs_d_weat_embed" in result.summary
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("attribute", ["race", "gender"])
+@pytest.mark.parametrize("prompt_mode", ["raw", "instruct"])
+def test_implicit_explicit_smoke(model_and_tokenizer, prompt_mode, attribute):
+    model, tokenizer = model_and_tokenizer
+    result = implicit_explicit.run(
+        model, tokenizer, TINY_SPEC, prompt_mode=prompt_mode,
+        attribute=attribute, limit=2,
+    )
+    assert result.benchmark == f"implicit_explicit_{attribute}"
+    assert result.prompt_mode == prompt_mode
+    assert {"implicit_bias_rate", "explicit_bias_rate", "implicit_explicit_gap"} <= set(
+        result.summary
+    )
+    assert len(result.per_example) == 2
 
 
 @pytest.mark.integration

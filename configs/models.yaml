@@ -1,8 +1,11 @@
 # Central model registry. Every script reads from this file.
-# 33 base ↔ instruct pairs = 66 checkpoints across 4 families.
+# 30 base ↔ instruct pairs = 60 checkpoints across 4 families.
 # All models load in full bfloat16 — no quantization.
-# Models ≥70B are intentionally excluded: they don't fit a single H100/A100
-# in bf16 and quantizing only the largest would introduce a confound.
+# Excluded: models ≥70B (don't fit a single H100/A100 in bf16) and Gemma
+# ≥27B (Gemma's vocabulary, attention, and tokenizer differ enough from
+# the others that the largest variants would muddy cross-family comparisons
+# while costing ~30h GPU each — kept the 1B-12B Gemmas for an architecture
+# robustness check; the headline 3-region story is Llama × Qwen × Mistral).
 
 families:
   llama:
@@ -207,15 +210,6 @@ families:
             hidden_size: 3584
             dtype: "bfloat16"
             model_class: "AutoModelForCausalLM"
-          - size: "27B"
-            base_id: "google/gemma-2-27b"
-            instruct_id: "google/gemma-2-27b-it"
-            num_params: 27_000_000_000
-            num_layers: 46
-            hidden_size: 4608
-            dtype: "bfloat16"
-            model_class: "AutoModelForCausalLM"
-            notes: "~54GB in bf16, fits comfortably on A100 80GB"
       - name: "Gemma 3"
         release_date: "2025-03"
         notes: "1B is text-only; 4B/12B/27B are multimodal — load with Gemma3ForCausalLM for text-only mode."
@@ -244,29 +238,6 @@ families:
             hidden_size: 3840
             dtype: "bfloat16"
             model_class: "Gemma3ForCausalLM"
-          - size: "27B"
-            base_id: "google/gemma-3-27b-pt"
-            instruct_id: "google/gemma-3-27b-it"
-            num_params: 27_000_000_000
-            num_layers: 62
-            hidden_size: 5376
-            dtype: "bfloat16"
-            model_class: "Gemma3ForCausalLM"
-            notes: "~54GB in bf16, fits H100 80GB"
-      - name: "Gemma 4"
-        release_date: "2026-04"
-        notes: "Newest generation — load with Gemma4ForCausalLM for text-only mode. VERIFY HF IDs before relying on these (released ~April 2026)."
-        models:
-          - size: "31B"
-            base_id: "google/gemma-4-31B"
-            instruct_id: "google/gemma-4-31B-it"
-            num_params: 31_000_000_000
-            num_layers: 50
-            hidden_size: 4608
-            dtype: "bfloat16"
-            model_class: "Gemma4ForCausalLM"
-            notes: "~62GB in bf16, fits on A100 80GB with batch_size=1"
-
   mistral:
     display_name: "Mistral"
     vendor: "Mistral AI"

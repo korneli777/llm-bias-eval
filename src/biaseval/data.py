@@ -87,18 +87,83 @@ def _ensure_cache(name: str) -> Path:
     return p
 
 
-def fetch_crows_pairs() -> list[dict]:
-    """Download (and cache) the CrowS-Pairs CSV; return a list of row dicts."""
-    cache = _ensure_cache("crows_pairs.csv")
-    if not cache.exists():
-        logger.info("Downloading CrowS-Pairs to %s", cache)
-        urllib.request.urlretrieve(CROWS_PAIRS_URL, cache)
+def fetch_crows_pairs(language: str = "en") -> list[dict]:
+    """Download (and cache) the CrowS-Pairs CSV; return a list of row dicts.
 
-    with open(cache, newline="") as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
-    logger.info("CrowS-Pairs: %d rows", len(rows))
-    return rows
+    For English (``language="en"``), uses the original NYU MLL release.
+    For non-English, loads from the BigScienceBiasEval/crows_pairs_multilingual
+    HF dataset (Néveol et al. 2022) and normalises to the same row shape as
+    English so downstream scoring code is language-agnostic.
+
+    Each returned row has at least ``sent_more``, ``sent_less``, ``bias_type``,
+    ``stereo_antistereo`` keys — same as the English release.
+    """
+    if language == "en":
+        cache = _ensure_cache("crows_pairs.csv")
+        if not cache.exists():
+            logger.info("Downloading CrowS-Pairs (en) to %s", cache)
+            urllib.request.urlretrieve(CROWS_PAIRS_URL, cache)
+        with open(cache, newline="") as f:
+            rows = list(csv.DictReader(f))
+        logger.info("CrowS-Pairs (en): %d rows", len(rows))
+        return rows
+
+    return _fetch_crows_pairs_multilingual(language)
+
+
+# Map common short codes to the HF config names used by the multilingual repo.
+_LANG_CODE_TO_HF_CONFIG = {
+    "fr": "french", "french": "french",
+    "es": "spanish", "spanish": "spanish",
+    "de": "german", "german": "german",
+    "pt": "portuguese", "portuguese": "portuguese",
+    "it": "italian", "italian": "italian",
+}
+
+
+def _fetch_crows_pairs_multilingual(language: str) -> list[dict]:
+    """Load + normalise BigScienceBiasEval/crows_pairs_multilingual."""
+    config = _LANG_CODE_TO_HF_CONFIG.get(language.lower())
+    if config is None:
+        raise ValueError(
+            f"Unsupported language {language!r}. Supported: "
+            f"{sorted(set(_LANG_CODE_TO_HF_CONFIG.values()))}"
+        )
+
+    from datasets import load_dataset
+
+    # Try the standard HF load first; fall back with trust_remote_code if the
+    # dataset's loading script demands it.
+    try:
+        ds = load_dataset("BigScienceBiasEval/crows_pairs_multilingual",
+                          config, split="test")
+    except Exception:
+        ds = load_dataset(
+            "BigScienceBiasEval/crows_pairs_multilingual",
+            config, split="test", trust_remote_code=True,
+        )
+
+    out: list[dict] = []
+    for row in ds:
+        # The dataset has been published with several column-name variants.
+        # Normalise: map any of them to {sent_more, sent_less, bias_type,
+        # stereo_antistereo} and drop rows missing the essentials.
+        sm = row.get("sent_more") or row.get(f"sent_more_{config[:2]}") or row.get("sentence_more")
+        sl = row.get("sent_less") or row.get(f"sent_less_{config[:2]}") or row.get("sentence_less")
+        if not sm or not sl:
+            continue
+        bt = row.get("bias_type") or row.get("bias_category") or "unknown"
+        direction = (row.get("stereo_antistereo")
+                     or row.get("direction")
+                     or "stereo")
+        out.append({
+            "sent_more": sm,
+            "sent_less": sl,
+            "bias_type": bt,
+            "stereo_antistereo": direction,
+        })
+    logger.info("CrowS-Pairs (%s): %d rows", language, len(out))
+    return out
 
 
 def load_stereoset_intrasentence(split: str = "validation") -> list[dict]:

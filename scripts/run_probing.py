@@ -24,7 +24,6 @@ from dotenv import load_dotenv
 from transformers import set_seed
 
 from biaseval.io import (
-    activation_dir,
     is_completed,
     probe_result_path,
     write_probe_result,
@@ -46,6 +45,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--results-root", default="results")
     p.add_argument("--family", default=None)
     p.add_argument("--variant", default=None, choices=["base", "instruct"])
+    p.add_argument("--mask-keywords", action="store_true",
+                   help="Audit-3 controlled probe: exclude demographic-keyword "
+                        "tokens from the activation pool to prevent surface-form "
+                        "leakage. Activations and probe results are written to "
+                        "separate `*_masked` directories so the unmasked baseline "
+                        "is preserved for comparison.")
     p.add_argument("--no-wandb", action="store_true")
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
@@ -82,9 +87,37 @@ def main() -> int:
     probe_datasets = {attr: build_probe_dataset(attr, max_per_class=max_per_class)
                       for attr in attributes}
 
+    # Audit-3 controlled probe: build the keyword union from all attributes
+    # we're probing for, so a single masked extraction works for both gender
+    # and race probes.
+    mask_keywords: set[str] | None = None
+    if args.mask_keywords:
+        from biaseval.probing.datasets import GENDER_KEYWORDS, RACE_KEYWORDS
+        kw_lookup = {"gender": GENDER_KEYWORDS, "race": RACE_KEYWORDS}
+        mask_keywords = set()
+        for attr in attributes:
+            for s in kw_lookup.get(attr, {}).values():
+                mask_keywords |= s
+        logger.info("Mask-keywords mode active: %d demographic surface forms "
+                    "will be excluded from the activation pool", len(mask_keywords))
+
+    # Suffix to keep masked artefacts in a separate namespace.
+    suffix = "_masked" if args.mask_keywords else ""
+
+    def _act_dir(spec):
+        if not suffix:
+            from biaseval.io import activation_dir as _ad
+            return _ad(results_root, spec)
+        return results_root / f"activations{suffix}" / spec.short_name
+
+    def _probe_path(spec, attribute):
+        if not suffix:
+            return probe_result_path(results_root, spec, attribute)
+        return results_root / f"probe_results{suffix}" / spec.short_name / f"{attribute}.json"
+
     for spec in specs:
         pending = [a for a in attributes
-                   if not is_completed(probe_result_path(results_root, spec, a))]
+                   if not is_completed(_probe_path(spec, a))]
         if not pending:
             logger.info("[skip] %s — all attributes done", spec.model_id)
             n_skipped += len(attributes)
@@ -110,11 +143,12 @@ def main() -> int:
 
         # Smaller batch for ≥27B models.
         batch_size = 1 if spec.num_params >= 27_000_000_000 else 4
-        adir = activation_dir(results_root, spec)
+        adir = _act_dir(spec)
         try:
             num_layers = extract_activations(
                 model, tokenizer, all_sentences, adir,
                 pool=pool, batch_size=batch_size,
+                mask_keywords=mask_keywords,
             )
         except Exception:
             logger.error("[error] activation extraction failed for %s\n%s",
@@ -158,7 +192,27 @@ def main() -> int:
                         sliced_dir, labels, num_layers, attr, cv_folds=cv_folds,
                         seed=args.seed,
                     )
-                    write_probe_result(results_root, spec, attr, layer_results)
+                    if suffix:
+                        # Manual write to the masked path (mirrors write_probe_result shape).
+                        import json
+
+                        from biaseval.io import _runtime_metadata
+                        out = _probe_path(spec, attr)
+                        out.parent.mkdir(parents=True, exist_ok=True)
+                        out.write_text(json.dumps({
+                            "spec": {
+                                "model_id": spec.model_id, "family": spec.family,
+                                "generation": spec.generation, "size": spec.size,
+                                "variant": spec.variant, "num_layers": spec.num_layers,
+                                "hidden_size": spec.hidden_size,
+                            },
+                            "attribute": attr,
+                            "layers": layer_results,
+                            "mask_keywords": True,
+                            "runtime": _runtime_metadata(),
+                        }, indent=2, default=str))
+                    else:
+                        write_probe_result(results_root, spec, attr, layer_results)
                     peak = max(r["mean_accuracy"] for r in layer_results)
                     tracker.summary_update({"peak_accuracy": peak,
                                             "n_sentences": len(labels)})

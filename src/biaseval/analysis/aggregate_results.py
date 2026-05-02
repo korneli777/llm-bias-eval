@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,77 @@ def aggregate_probe_results(results_root: Path) -> pd.DataFrame:
                     "std_accuracy": layer["std_accuracy"],
                 }
             )
+    return pd.DataFrame(rows)
+
+
+def load_probe_directions(
+    results_root: Path,
+) -> dict[tuple[str, str], np.ndarray]:
+    """Load every saved direction-vector tensor under results/activations/.
+
+    `results/activations/<short_name>/direction_<attr>.npy` is written by
+    `train_probes_all_layers(save_directions=True)` (Step 1 of the probing
+    overhaul). Each file holds a `(num_layers, hidden)` array of unit-norm
+    mean-difference vectors, one per layer.
+
+    Returns a dict keyed by `(model_short_name, attribute)` so callers can
+    pair base/instruct directions for the rotation figure.
+    """
+    out: dict[tuple[str, str], np.ndarray] = {}
+    base = Path(results_root) / "activations"
+    if not base.exists():
+        return out
+    for model_dir in base.iterdir():
+        if not model_dir.is_dir():
+            continue
+        for npy in model_dir.glob("direction_*.npy"):
+            attr = npy.stem.removeprefix("direction_")
+            try:
+                arr = np.load(npy)
+            except (OSError, ValueError) as exc:
+                logger.warning("Failed to load %s: %s", npy, exc)
+                continue
+            out[(model_dir.name, attr)] = arr
+    return out
+
+
+def cross_pair_direction_cosines(
+    results_root: Path,
+    registry_pairs: list[tuple[str, str, str, str, str]],
+    attributes: tuple[str, ...] = ("gender", "race"),
+) -> pd.DataFrame:
+    """Per layer, cosine similarity between base and instruct direction vectors.
+
+    Rows: one per (pair, attribute, layer). Columns include depth_frac so
+    the figure can plot on a normalised x-axis across models with different
+    layer counts.
+    """
+    dirs = load_probe_directions(results_root)
+    if not dirs:
+        return pd.DataFrame()
+
+    rows: list[dict] = []
+    for base_id, instruct_id, family, generation, size in registry_pairs:
+        base_short = base_id.replace("/", "__")
+        inst_short = instruct_id.replace("/", "__")
+        for attr in attributes:
+            b = dirs.get((base_short, attr))
+            i = dirs.get((inst_short, attr))
+            if b is None or i is None:
+                continue
+            n = min(b.shape[0], i.shape[0])
+            for layer in range(n):
+                bv, iv = b[layer], i[layer]
+                nb, ni = float(np.linalg.norm(bv)), float(np.linalg.norm(iv))
+                cos = (float(np.dot(bv, iv)) / (nb * ni)) if nb > 0 and ni > 0 else float("nan")
+                rows.append({
+                    "family": family, "generation": generation, "size": size,
+                    "base_id": base_id, "instruct_id": instruct_id,
+                    "attribute": attr,
+                    "layer": layer,
+                    "depth_frac": layer / max(n - 1, 1),
+                    "cosine": cos,
+                })
     return pd.DataFrame(rows)
 
 

@@ -30,7 +30,7 @@ import yaml
 from dotenv import load_dotenv
 from transformers import set_seed
 
-from biaseval.benchmarks import bbq, crows_pairs, iat, stereoset
+from biaseval.benchmarks import bbq, crows_pairs, iat, implicit_explicit, stereoset
 from biaseval.benchmarks.utils import PROMPT_MODES
 from biaseval.io import (
     is_completed,
@@ -49,6 +49,10 @@ BENCHMARK_RUNNERS = {
     "stereoset": stereoset.run,
     "bbq": bbq.run,
     "iat": iat.run,
+    "implicit_explicit_race": lambda m, t, s, **kw: implicit_explicit.run(
+        m, t, s, attribute="race", **kw),
+    "implicit_explicit_gender": lambda m, t, s, **kw: implicit_explicit.run(
+        m, t, s, attribute="gender", **kw),
 }
 
 
@@ -58,12 +62,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--bench-config", default="configs/benchmarks.yaml")
     p.add_argument("--results-root", default="results")
     p.add_argument("--family", default=None, help="Limit to one family (llama, qwen, gemma, mistral, olmo)")
+    p.add_argument("--models", nargs="+", default=None,
+                   help="Limit to specific HF model IDs (overrides --family).")
     p.add_argument("--variant", default=None, choices=["base", "instruct"])
     p.add_argument("--benchmarks", nargs="+", default=None,
                    help="Subset of benchmarks (default: all enabled in benchmarks.yaml)")
     p.add_argument("--prompt-modes", nargs="+", default=list(PROMPT_MODES),
                    choices=list(PROMPT_MODES),
                    help="Prompt conditions to evaluate (default: raw + instruct).")
+    p.add_argument("--languages", nargs="+", default=["en"],
+                   help="Languages to run CrowS-Pairs in (default: en). "
+                        "Use 'fr', 'es', 'de', 'pt', 'it' for non-English. "
+                        "Other benchmarks are English-only and ignore this flag.")
     p.add_argument("--limit", type=int, default=None,
                    help="Cap dataset size per benchmark (debugging)")
     p.add_argument("--no-wandb", action="store_true")
@@ -105,7 +115,11 @@ def main() -> int:
         specs = [_load_smoke_spec(args.config)]
         limit = args.limit or 8
     else:
-        specs = list(filter_specs(load_registry(args.config), family=args.family, variant=args.variant))
+        specs = list(filter_specs(
+            load_registry(args.config),
+            family=args.family, variant=args.variant,
+            only_ids=set(args.models) if args.models else None,
+        ))
         limit = args.limit
     logger.info("Will evaluate %d models × %d benchmarks", len(specs), len(enabled))
 
@@ -115,20 +129,49 @@ def main() -> int:
         logger.info("Migrated %d legacy result file(s) to __raw.json", migrated)
 
     prompt_modes: list[str] = args.prompt_modes
+    languages: list[str] = args.languages
     n_done, n_skipped, n_errors = 0, 0, 0
 
+    def _result_bench_name(runner_key: str, language: str) -> str:
+        """Result-folder name; CrowS-Pairs in non-English languages gets a suffix."""
+        if runner_key == "crows_pairs" and language != "en":
+            return f"crows_pairs_{language}"
+        return runner_key
+
+    def _build_cells(prompt_modes, languages):
+        """All (runner_key, prompt_mode, language) tuples per the user's flags.
+
+        CrowS-Pairs gets one cell per (mode, lang); other benchmarks are
+        English-only and get one cell per mode.
+        """
+        for runner_key in enabled:
+            if runner_key == "crows_pairs":
+                for lang in languages:
+                    for pm in prompt_modes:
+                        yield runner_key, pm, lang
+            else:
+                for pm in prompt_modes:
+                    yield runner_key, pm, "en"
+
     for spec in specs:
-        # Pending = (benchmark, prompt_mode) pairs whose result file doesn't exist.
+        all_cells = list(_build_cells(prompt_modes, languages))
+        # Jailbreak prompts only make sense on instruct variants — there's no
+        # safety filter to bypass on a base model, and the chat template may
+        # not exist. Skip the cell silently rather than emitting noise files.
+        all_cells = [(rk, pm, lang) for rk, pm, lang in all_cells
+                     if not (pm == "jailbreak" and spec.variant != "instruct")]
         pending = [
-            (b, pm) for b in enabled for pm in prompt_modes
-            if not is_completed(logit_result_path(results_root, b, spec, pm))
+            (rk, pm, lang) for rk, pm, lang in all_cells
+            if not is_completed(
+                logit_result_path(results_root, _result_bench_name(rk, lang), spec, pm)
+            )
         ]
         if not pending:
-            logger.info("[skip] %s — all (benchmark, prompt_mode) cells done", spec.model_id)
-            n_skipped += len(enabled) * len(prompt_modes)
+            logger.info("[skip] %s — all cells done", spec.model_id)
+            n_skipped += len(all_cells)
             continue
 
-        logger.info("[load] %s (pending: %s)", spec.model_id, pending)
+        logger.info("[load] %s (pending: %d cells)", spec.model_id, len(pending))
         try:
             model, tokenizer = load_model(spec)
         except Exception:
@@ -136,30 +179,35 @@ def main() -> int:
             n_errors += len(pending)
             continue
 
-        for bench, pm in pending:
+        for runner_key, pm, lang in pending:
+            bench_name = _result_bench_name(runner_key, lang)
             run_ctx = init_run(
-                name=f"{bench}/{pm}/{spec.short_name}",
-                job_type=bench,
-                tags=[spec.family, spec.variant, bench, f"prompt:{pm}"],
+                name=f"{bench_name}/{pm}/{spec.short_name}",
+                job_type=bench_name,
+                tags=[spec.family, spec.variant, bench_name, f"prompt:{pm}", f"lang:{lang}"],
                 config={
                     "model_id": spec.model_id, "family": spec.family,
-                    "variant": spec.variant, "size": spec.size, "benchmark": bench,
-                    "prompt_mode": pm, "seed": args.seed, "limit": limit,
+                    "variant": spec.variant, "size": spec.size, "benchmark": bench_name,
+                    "prompt_mode": pm, "language": lang,
+                    "seed": args.seed, "limit": limit,
                 },
                 enabled=not args.no_wandb,
             )
             with run_ctx as tracker:
                 try:
-                    runner = BENCHMARK_RUNNERS[bench]
+                    runner = BENCHMARK_RUNNERS[runner_key]
                     kwargs: dict = {"prompt_mode": pm}
-                    if limit is not None and bench != "iat":
+                    if runner_key == "crows_pairs":
+                        kwargs["language"] = lang
+                    if limit is not None and runner_key != "iat":
                         kwargs["limit"] = limit
                     result = runner(model, tokenizer, spec, **kwargs)
                     write_benchmark_result(results_root, result, spec)
                     tracker.summary_update(result.summary)
                     n_done += 1
                 except Exception:
-                    logger.error("[error] %s/%s on %s\n%s", bench, pm, spec.model_id, traceback.format_exc())
+                    logger.error("[error] %s/%s/%s on %s\n%s",
+                                 bench_name, pm, lang, spec.model_id, traceback.format_exc())
                     n_errors += 1
 
         unload_model(model)

@@ -57,6 +57,21 @@ benchmarks:
       Adapted from Bai et al. (PNAS 2025). Word-association prompts: compute log P(attr | concept)
       for stereotypical vs anti-stereotypical pairings. Effect size analogous to Cohen's d.
 
+  implicit_explicit_race:
+    enabled: true
+    source: "github.com/slhleosun/aligned-but-blind"
+    notes: |
+      Sun et al. 2025 implicit-vs-explicit 2x2 (race). Implicit = word-pairing task
+      (no demographic word in answer); explicit = Likert agreement with stereotype
+      statement. Headline: implicit_explicit_gap = % implicit-bias − % explicit-bias.
+
+  implicit_explicit_gender:
+    enabled: true
+    source: "github.com/slhleosun/aligned-but-blind (adapted)"
+    notes: |
+      Same 2x2 logic as implicit_explicit_race, extended to gender via WEAT-6/7
+      stimuli (career-family, science-arts).
+
 # Output paths (relative to project root).
 outputs:
   results_root: "results"

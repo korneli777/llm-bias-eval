@@ -30,6 +30,23 @@ def train_layer_probe(
     }
 
 
+def mean_difference_direction(X: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Sun et al. (2025) direction vector: μ(class=1) − μ(class=0).
+
+    Returns a unit-norm vector in activation space pointing from class 0
+    centroid to class 1 centroid. This is the direction we'd add/subtract
+    along for activation steering, and the projection axis for ablation —
+    so we save it alongside probe accuracy at every layer.
+    """
+    if len(np.unique(y)) < 2:
+        return np.zeros(X.shape[1], dtype=np.float32)
+    mu1 = X[y == 1].mean(axis=0)
+    mu0 = X[y == 0].mean(axis=0)
+    diff = (mu1 - mu0).astype(np.float32)
+    nrm = float(np.linalg.norm(diff))
+    return diff / nrm if nrm > 0 else diff
+
+
 def train_probes_all_layers(
     activation_dir: str | Path,
     labels: np.ndarray,
@@ -38,10 +55,14 @@ def train_probes_all_layers(
     *,
     cv_folds: int = 5,
     seed: int = 42,
+    save_directions: bool = True,
 ) -> list[dict]:
-    """Iterate every layer's .npy file and train a probe."""
+    """Iterate every layer's .npy file, train a probe, save direction vector."""
     activation_dir = Path(activation_dir)
     results: list[dict] = []
+    if save_directions:
+        directions = np.zeros((num_layers, np.load(activation_dir / "layer_0.npy").shape[1]),
+                              dtype=np.float32)
     for layer_idx in range(num_layers):
         X = np.load(activation_dir / f"layer_{layer_idx}.npy")
         scores = train_layer_probe(X, labels, cv_folds=cv_folds, seed=seed)
@@ -53,4 +74,8 @@ def train_probes_all_layers(
                 **scores,
             }
         )
+        if save_directions:
+            directions[layer_idx] = mean_difference_direction(X, labels)
+    if save_directions:
+        np.save(activation_dir / f"direction_{attribute_name}.npy", directions)
     return results

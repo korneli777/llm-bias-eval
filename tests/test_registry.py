@@ -9,14 +9,14 @@ CONFIG = "configs/models.yaml"
 
 def test_registry_size():
     specs = load_registry(CONFIG)
-    assert len(specs) == 66, "expected 33 base+instruct pairs (66 specs)"
+    assert len(specs) == 60, "expected 30 base+instruct pairs (60 specs)"
 
 
 def test_registry_pairs():
     specs = load_registry(CONFIG)
     base = [s for s in specs if s.variant == "base"]
     inst = [s for s in specs if s.variant == "instruct"]
-    assert len(base) == len(inst) == 33
+    assert len(base) == len(inst) == 30
 
 
 def test_families_present():
@@ -43,12 +43,14 @@ def test_filter_by_family():
     assert all(s.family == "mistral" for s in mistral)
 
 
-def test_gemma3_4_use_special_class():
+def test_gemma3_uses_special_class():
+    """Gemma 3 needs Gemma3ForCausalLM for text-only loading."""
     specs = load_registry(CONFIG)
     g3 = [s for s in specs if "gemma-3" in s.model_id]
-    g4 = [s for s in specs if "gemma-4" in s.model_id]
     assert g3 and all(s.model_class == "Gemma3ForCausalLM" for s in g3)
-    assert g4 and all(s.model_class == "Gemma4ForCausalLM" for s in g4)
+    # Gemma 4 is intentionally excluded — see configs/models.yaml header.
+    g4 = [s for s in specs if "gemma-4" in s.model_id]
+    assert not g4, "Gemma 4 should be excluded from the registry"
 
 
 def test_gated_flag_set():

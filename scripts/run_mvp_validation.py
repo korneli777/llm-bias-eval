@@ -37,6 +37,8 @@ from biaseval.analysis.aggregate_results import (
 from biaseval.analysis.plotting import generate_all
 from biaseval.analysis.statistics import (
     cross_benchmark_consistency,
+    cross_language_consistency,
+    pair_significance_per_language,
     pair_significance_table,
 )
 from biaseval.benchmarks import bbq, crows_pairs, iat, implicit_explicit, stereoset
@@ -56,6 +58,11 @@ MVP_PAIRS: list[tuple[str, str]] = [
     ("Qwen/Qwen2.5-3B", "Qwen/Qwen2.5-3B-Instruct"),
     ("mistralai/Mistral-7B-v0.3", "mistralai/Mistral-7B-Instruct-v0.3"),
 ]
+
+# Languages the MVP validates end-to-end. English exercises the production
+# default; fr + de stress the multilingual code path (different tokenisation,
+# different chat-template behaviour). The full sweep can run more languages.
+MVP_LANGUAGES: tuple[str, ...] = ("en", "fr", "de")
 
 # (runner_key, function, accepts_limit). We keep IAT and implicit_explicit at
 # full size — they are tiny anyway. CrowS / BBQ / StereoSet honour --limit.
@@ -124,9 +131,16 @@ def stage1_logit_benchmarks(
     results_root: Path,
     *,
     benchmark_limit: int = 100,
+    languages: tuple[str, ...] = MVP_LANGUAGES,
     seed: int = 42,
 ) -> dict:
-    """Run all benchmarks × all variants × applicable prompt modes."""
+    """Run all benchmarks × all variants × applicable prompt modes.
+
+    `languages` controls which CrowS-Pairs languages get exercised. Other
+    benchmarks are English-only and ignore this. Default = ("en", "fr", "de")
+    so the multilingual code path (statistics + figures + tokenizer) gets
+    smoke-tested on every model before the full sweep.
+    """
     cells_run: list[dict] = []
     hard_fails: list[str] = []
 
@@ -156,16 +170,19 @@ def stage1_logit_benchmarks(
                                 spec.family, sample_jb[:300])
 
                 for runner_key, (fn, accepts_limit) in BENCHMARK_RUNNERS.items():
-                    for prompt_mode in ("raw", "instruct"):
-                        cell = _run_one_cell(
-                            fn, runner_key, accepts_limit, model, tokenizer,
-                            spec, prompt_mode, results_root,
-                            benchmark_limit=benchmark_limit,
-                        )
-                        cells_run.append(cell)
-                        hard_fails.extend(cell["hard_fails"])
+                    # CrowS-Pairs runs in every language; everything else is en-only.
+                    cell_langs = languages if runner_key == "crows_pairs" else ("en",)
+                    for lang in cell_langs:
+                        for prompt_mode in ("raw", "instruct"):
+                            cell = _run_one_cell(
+                                fn, runner_key, accepts_limit, model, tokenizer,
+                                spec, prompt_mode, results_root,
+                                benchmark_limit=benchmark_limit, language=lang,
+                            )
+                            cells_run.append(cell)
+                            hard_fails.extend(cell["hard_fails"])
 
-                # Jailbreak — instruct variants only, CrowS only.
+                # Jailbreak — instruct variants only, CrowS English only.
                 if spec.variant == "instruct":
                     cell = _run_one_cell(
                         crows_pairs.run, "crows_pairs", True, model, tokenizer,
@@ -181,19 +198,29 @@ def stage1_logit_benchmarks(
     return {"cells": cells_run, "hard_fails": hard_fails}
 
 
+def _bench_folder(runner_key: str, language: str) -> str:
+    """Result-folder name. CrowS-Pairs gets a language suffix for non-English;
+    everything else stays the runner key."""
+    if runner_key == "crows_pairs" and language != "en":
+        return f"crows_pairs_{language}"
+    return runner_key
+
+
 def _run_one_cell(
     runner, runner_key, accepts_limit, model, tokenizer, spec,
-    prompt_mode, results_root, *, benchmark_limit,
+    prompt_mode, results_root, *, benchmark_limit, language: str = "en",
 ) -> dict:
-    """Run one (model, benchmark, prompt_mode) cell with hard-fail accounting."""
+    """Run one (model, benchmark, prompt_mode, language) cell with hard-fail accounting."""
+    bench_folder = _bench_folder(runner_key, language)
+    cell_label = f"{bench_folder}/{prompt_mode}"
     info: dict = {
         "model_id": spec.model_id, "family": spec.family, "variant": spec.variant,
-        "benchmark": runner_key, "prompt_mode": prompt_mode,
+        "benchmark": bench_folder, "prompt_mode": prompt_mode, "language": language,
         "ok": False, "elapsed_s": None, "hard_fails": [],
     }
-    fp = logit_result_path(results_root, runner_key, spec, prompt_mode)
+    fp = logit_result_path(results_root, bench_folder, spec, prompt_mode)
     if is_completed(fp):
-        logger.info("[skip] %s/%s/%s already done", spec.short_name, runner_key, prompt_mode)
+        logger.info("[skip] %s/%s already done", spec.short_name, cell_label)
         info["ok"] = True
         info["elapsed_s"] = 0.0
         return info
@@ -203,6 +230,9 @@ def _run_one_cell(
         kwargs: dict = {"prompt_mode": prompt_mode}
         if accepts_limit:
             kwargs["limit"] = benchmark_limit
+        # Only crows_pairs honours `language`; passing it elsewhere would error.
+        if runner_key == "crows_pairs" and language != "en":
+            kwargs["language"] = language
         result = runner(model, tokenizer, spec, **kwargs)
         write_benchmark_result(results_root, result, spec)
         info["elapsed_s"] = time.time() - t0
@@ -211,20 +241,20 @@ def _run_one_cell(
         bad = _summary_has_nan_inf(result.summary)
         if bad:
             info["hard_fails"].append(
-                f"{spec.short_name}/{runner_key}/{prompt_mode}: NaN/Inf in {bad}"
+                f"{spec.short_name}/{cell_label}: NaN/Inf in {bad}"
             )
         problem = _per_example_fields_ok(runner_key, result.per_example)
         if problem:
             info["hard_fails"].append(
-                f"{spec.short_name}/{runner_key}/{prompt_mode}: {problem}"
+                f"{spec.short_name}/{cell_label}: {problem}"
             )
         info["ok"] = not info["hard_fails"]
     except Exception as exc:
         info["hard_fails"].append(
-            f"{spec.short_name}/{runner_key}/{prompt_mode}: exception {exc!r}"
+            f"{spec.short_name}/{cell_label}: exception {exc!r}"
         )
-        logger.error("[FAIL] %s/%s/%s\n%s", spec.short_name, runner_key,
-                     prompt_mode, traceback.format_exc())
+        logger.error("[FAIL] %s/%s\n%s", spec.short_name, cell_label,
+                     traceback.format_exc())
     return info
 
 
@@ -237,9 +267,10 @@ def stage2_statistics(
     pair_specs: list[tuple[ModelSpec, ModelSpec]],
     results_root: Path,
     *,
+    languages: tuple[str, ...] = MVP_LANGUAGES,
     n_perm: int = 5000, n_boot: int = 5000, seed: int = 42,
 ) -> dict:
-    """Run pair_significance_table + cross_benchmark_consistency on MVP data.
+    """Run paired stats + cross-bench + per-language + cross-language helpers.
 
     n_perm/n_boot lowered from production (10k) to keep validation fast — still
     enough resolution to verify the columns and signs are right.
@@ -276,6 +307,35 @@ def stage2_statistics(
                      traceback.format_exc())
         out["consistency_df"] = None
         out["corr_df"] = None
+
+    try:
+        out["pair_sig_per_lang_df"] = pair_significance_per_language(
+            results_root, registry_pairs, languages=languages,
+            n_perm=n_perm, n_boot=n_boot, seed=seed,
+        )
+        logger.info("pair_significance_per_language: %d (pair × lang) rows "
+                    "across %d langs", len(out["pair_sig_per_lang_df"]),
+                    len(languages))
+    except Exception as exc:
+        out["hard_fails"].append(f"pair_significance_per_language: {exc!r}")
+        logger.error("[FAIL] pair_significance_per_language\n%s",
+                     traceback.format_exc())
+        out["pair_sig_per_lang_df"] = None
+
+    try:
+        lang_cons_df, lang_corr_df = cross_language_consistency(
+            results_root, registry_pairs, languages=languages,
+        )
+        out["lang_consistency_df"] = lang_cons_df
+        out["lang_corr_df"] = lang_corr_df
+        logger.info("cross_language_consistency: %d pairs, corr shape %s",
+                    len(lang_cons_df), lang_corr_df.shape)
+    except Exception as exc:
+        out["hard_fails"].append(f"cross_language_consistency: {exc!r}")
+        logger.error("[FAIL] cross_language_consistency\n%s",
+                     traceback.format_exc())
+        out["lang_consistency_df"] = None
+        out["lang_corr_df"] = None
 
     return out
 
@@ -423,6 +483,9 @@ def stage4_figures(
     *,
     pair_sig_df,
     consistency_df,
+    pair_sig_per_lang_df=None,
+    lang_consistency_df=None,
+    lang_corr_df=None,
 ) -> dict:
     """Call every plotting function with the MVP data; hard-fail on any crash.
 
@@ -461,6 +524,9 @@ def stage4_figures(
             pair_sig_df=pair_sig_df,
             consistency_df=consistency_df,
             direction_cosines_df=direction_cosines_df,
+            pair_sig_per_lang_df=pair_sig_per_lang_df,
+            lang_consistency_df=lang_consistency_df,
+            lang_corr_df=lang_corr_df,
             results_dir=results_root,
             registry_pairs=registry_pairs,
         )
@@ -658,6 +724,51 @@ def _verdict(hard_fails: list[str], soft_notes: list[str]) -> str:
             "raised. Safe to queue the full sweep.")
 
 
+def _build_multilingual_table(stage2: dict) -> str:
+    """Per-pair × per-language Cohen's d (with ★/★★ Holm markers).
+
+    Reads `pair_sig_per_lang_df` from stage2. Columns = languages; rows = pairs.
+    Each cell shows the d value plus star markers from the within-language
+    Holm correction.
+    """
+    df = stage2.get("pair_sig_per_lang_df")
+    if df is None or df.empty:
+        return "_No multilingual paired stats._"
+    df = df.copy()
+    df["pair_label"] = (df["family"].astype(str) + "/"
+                        + df["generation"].astype(str) + "/"
+                        + df["size"].astype(str))
+
+    def _cell(row):
+        d = row["cohens_d_paired"]
+        star = ("★★" if row.get("reject_strict") else
+                ("★" if row.get("reject_holm") else ""))
+        if d is None:
+            return "—"
+        try:
+            f = float(d)
+        except (TypeError, ValueError):
+            return "—"
+        if f != f:  # NaN
+            return "—"
+        return f"{f:+.2f}{(' ' + star) if star else ''}"
+
+    import pandas as pd
+    df["cell"] = df.apply(_cell, axis=1)
+    pivot = df.pivot(index="pair_label", columns="language", values="cell")
+    lang_order = [c for c in ("en", "fr", "es", "de", "pt", "it") if c in pivot.columns]
+    pivot = pivot[lang_order] if lang_order else pivot
+
+    head = "| Pair | " + " | ".join(pivot.columns) + " |"
+    sep  = "| --- | " + " | ".join("---" for _ in pivot.columns) + " |"
+    body = [
+        "| " + r + " | " + " | ".join(("—" if pd.isna(v) else str(v)) for v in pivot.loc[r])
+        + " |"
+        for r in pivot.index
+    ]
+    return "\n".join([head, sep, *body])
+
+
 def _build_probe_layer_table(stage3: dict) -> str:
     """Markdown grid: one row per layer (depth bucketed) per (model, attr).
 
@@ -706,6 +817,7 @@ def stage5_report(
 
     logit_df = aggregate_logit_results(results_root)
     table_md = _build_cross_family_table(pair_specs, logit_df)
+    multilingual_md = _build_multilingual_table(stage2)
     probe_layer_md = _build_probe_layer_table(stage3)
     soft_notes = _soft_observations(pair_specs, logit_df, stage3)
     hard_fails = (stage1["hard_fails"] + stage2["hard_fails"]
@@ -740,7 +852,9 @@ def stage5_report(
         f"- Stage 2 (statistics): pair_significance n_pairs="
         f"{0 if stage2.get('pair_sig_df') is None else len(stage2['pair_sig_df'])}, "
         f"consistency n_pairs="
-        f"{0 if stage2.get('consistency_df') is None else len(stage2['consistency_df'])}",
+        f"{0 if stage2.get('consistency_df') is None else len(stage2['consistency_df'])}, "
+        f"multilingual rows="
+        f"{0 if stage2.get('pair_sig_per_lang_df') is None else len(stage2['pair_sig_per_lang_df'])}",
         f"- Stage 3 (probing): {probe_models} models probed",
         f"- Stage 4 (figures): {figures_n} figures written → `{figures_root}`",
         "",
@@ -749,6 +863,13 @@ def stage5_report(
         "(Δ = instruct − base. Headline metrics in their canonical scoring.)",
         "",
         table_md,
+        "",
+        "## Multilingual paired d (CrowS-Pairs)",
+        "",
+        "(Pair × language Cohen's d. ★ = survives Holm at α=0.05 within that "
+        "language; ★★ = also survives α=0.0025.)",
+        "",
+        multilingual_md,
         "",
         "## Probe accuracy by layer depth",
         "",
@@ -853,6 +974,9 @@ def main() -> int:
         pair_specs, results_root, Path(args.figures_dir),
         pair_sig_df=stage2.get("pair_sig_df"),
         consistency_df=stage2.get("consistency_df"),
+        pair_sig_per_lang_df=stage2.get("pair_sig_per_lang_df"),
+        lang_consistency_df=stage2.get("lang_consistency_df"),
+        lang_corr_df=stage2.get("lang_corr_df"),
     )
     logger.info("Stage 4 took %.1fs (%d hard-fail, %d figures)",
                 time.time() - t_fig, len(stage4["hard_fails"]),

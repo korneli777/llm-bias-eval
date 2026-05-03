@@ -111,58 +111,56 @@ def fetch_crows_pairs(language: str = "en") -> list[dict]:
     return _fetch_crows_pairs_multilingual(language)
 
 
-# Map common short codes to the HF config names used by the multilingual repo.
+# Multilingual CrowS-Pairs availability is narrow: only English and French
+# exist as published, comparable benchmarks. The original BigScience repo
+# (`BigScienceBiasEval/crows_pairs_multilingual`) uses a dataset loading
+# script that newer `datasets` versions reject; we bypass it by downloading
+# the parquet mirror at `jannalu/crows_pairs_multilingual` directly. Spanish,
+# German, Italian and Portuguese versions of CrowS-Pairs do *not* exist on
+# HuggingFace as of this writing — see the search in `huggingface_hub`.
 _LANG_CODE_TO_HF_CONFIG = {
     "fr": "french", "french": "french",
-    "es": "spanish", "spanish": "spanish",
-    "de": "german", "german": "german",
-    "pt": "portuguese", "portuguese": "portuguese",
-    "it": "italian", "italian": "italian",
 }
 
 
 def _fetch_crows_pairs_multilingual(language: str) -> list[dict]:
-    """Load + normalise BigScienceBiasEval/crows_pairs_multilingual."""
+    """Load French CrowS-Pairs from the jannalu parquet mirror.
+
+    Pure `huggingface_hub.hf_hub_download` — no dataset loading script, robust
+    to `datasets`-library API changes. The parquet file already uses our
+    canonical column names (sent_more, sent_less, stereo_antistereo,
+    bias_type), so no normalisation is needed.
+    """
     config = _LANG_CODE_TO_HF_CONFIG.get(language.lower())
     if config is None:
         raise ValueError(
-            f"Unsupported language {language!r}. Supported: "
-            f"{sorted(set(_LANG_CODE_TO_HF_CONFIG.values()))}"
+            f"Unsupported language {language!r}. Supported multilingual "
+            f"CrowS-Pairs: {sorted(set(_LANG_CODE_TO_HF_CONFIG.values()))}. "
+            f"(Spanish/German/Italian/Portuguese CrowS-Pairs do not exist as "
+            f"published benchmarks.)"
         )
 
-    from datasets import load_dataset
+    import pyarrow.parquet as pq
+    from huggingface_hub import hf_hub_download
 
-    # Try the standard HF load first; fall back with trust_remote_code if the
-    # dataset's loading script demands it.
-    try:
-        ds = load_dataset("BigScienceBiasEval/crows_pairs_multilingual",
-                          config, split="test")
-    except Exception:
-        ds = load_dataset(
-            "BigScienceBiasEval/crows_pairs_multilingual",
-            config, split="test", trust_remote_code=True,
-        )
-
-    out: list[dict] = []
-    for row in ds:
-        # The dataset has been published with several column-name variants.
-        # Normalise: map any of them to {sent_more, sent_less, bias_type,
-        # stereo_antistereo} and drop rows missing the essentials.
-        sm = row.get("sent_more") or row.get(f"sent_more_{config[:2]}") or row.get("sentence_more")
-        sl = row.get("sent_less") or row.get(f"sent_less_{config[:2]}") or row.get("sentence_less")
-        if not sm or not sl:
-            continue
-        bt = row.get("bias_type") or row.get("bias_category") or "unknown"
-        direction = (row.get("stereo_antistereo")
-                     or row.get("direction")
-                     or "stereo")
-        out.append({
-            "sent_more": sm,
-            "sent_less": sl,
-            "bias_type": bt,
-            "stereo_antistereo": direction,
-        })
-    logger.info("CrowS-Pairs (%s): %d rows", language, len(out))
+    fp = hf_hub_download(
+        repo_id="jannalu/crows_pairs_multilingual",
+        filename=f"{config}/test-00000-of-00001.parquet",
+        repo_type="dataset",
+    )
+    table = pq.read_table(fp)
+    out: list[dict] = [
+        {
+            "sent_more": r["sent_more"],
+            "sent_less": r["sent_less"],
+            "bias_type": r.get("bias_type") or "unknown",
+            "stereo_antistereo": r.get("stereo_antistereo") or "stereo",
+        }
+        for r in table.to_pylist()
+        if r.get("sent_more") and r.get("sent_less")
+    ]
+    logger.info("CrowS-Pairs (%s): %d rows (jannalu parquet mirror)",
+                language, len(out))
     return out
 
 

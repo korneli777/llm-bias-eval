@@ -72,8 +72,9 @@ def parse_args() -> argparse.Namespace:
                    help="Prompt conditions to evaluate (default: raw + instruct).")
     p.add_argument("--languages", nargs="+", default=["en"],
                    help="Languages to run CrowS-Pairs in (default: en). "
-                        "Use 'fr', 'es', 'de', 'pt', 'it' for non-English. "
-                        "Other benchmarks are English-only and ignore this flag.")
+                        "Use 'fr' for French (the only other language with "
+                        "a published CrowS-Pairs benchmark). Other benchmarks "
+                        "are English-only and ignore this flag.")
     p.add_argument("--limit", type=int, default=None,
                    help="Cap dataset size per benchmark (debugging)")
     p.add_argument("--no-wandb", action="store_true")

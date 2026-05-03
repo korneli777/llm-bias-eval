@@ -48,9 +48,11 @@ def run(
         instruct → score lp(sentence | chat-templated instruction) so the
                    instruct model engages its safety/RLHF persona.
     language:
-        ISO-2 code or full name (en, fr, es, de, pt, it). Loads the
-        BigScienceBiasEval multilingual mirror for non-English; the English
-        path uses the original NYU release (1508 pairs).
+        ISO-2 code or full name. Only "en" and "fr" are supported — those
+        are the only languages with a published, comparable CrowS-Pairs
+        benchmark. English uses the original NYU release (1508 pairs);
+        French uses the parquet mirror at jannalu/crows_pairs_multilingual
+        (1677 pairs).
     """
     rows = fetch_crows_pairs(language=language)
     if limit is not None:

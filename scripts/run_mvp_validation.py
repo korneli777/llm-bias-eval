@@ -59,10 +59,12 @@ MVP_PAIRS: list[tuple[str, str]] = [
     ("mistralai/Mistral-7B-v0.3", "mistralai/Mistral-7B-Instruct-v0.3"),
 ]
 
-# Languages the MVP validates end-to-end. English exercises the production
-# default; fr + de stress the multilingual code path (different tokenisation,
-# different chat-template behaviour). The full sweep can run more languages.
-MVP_LANGUAGES: tuple[str, ...] = ("en", "fr", "de")
+# Languages the MVP validates end-to-end. CrowS-Pairs only exists in English
+# and French as a published, comparable benchmark — there are no Spanish /
+# German / Italian / Portuguese CrowS datasets on HF. So the multilingual
+# smoke is en + fr, which still exercises the multilingual code path
+# (statistics + figures + non-English tokenisation).
+MVP_LANGUAGES: tuple[str, ...] = ("en", "fr")
 
 # (runner_key, function, accepts_limit). We keep IAT and implicit_explicit at
 # full size — they are tiny anyway. CrowS / BBQ / StereoSet honour --limit.
